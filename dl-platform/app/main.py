@@ -30,8 +30,8 @@ from app.auth import (
 from app.config import settings
 from app.database import AsyncSessionLocal, Base, engine, get_session
 from app.email import email_service
-from app.models import ApiKey, Plan, User
-from app.platforms import get_engine, PLATFORM_ENGINES
+from app.models import ApiKey, Plan, Proxy, User
+from app.platforms import build_platform_engines, get_engine, PLATFORM_ENGINES
 from app.quota import get_quota, increment_usage, rate_limit_check
 from app.schemas import (
     APIResponse,
@@ -55,6 +55,37 @@ async def lifespan(app: FastAPI):
         if not result.scalar_one_or_none():
             session.add(Plan(name="Free", monthly_requests=100, price=0.0, active=True))
             await session.commit()
+
+        # Seed initial proxies if none exist
+        result = await session.execute(select(Proxy).limit(1))
+        if not result.scalar_one_or_none():
+            initial_proxies = [
+                Proxy(
+                    type="http",
+                    host="136.162.138.42",
+                    port=41217,
+                    user="6ZOGjaNvOh0LKL2",
+                    pass_encrypted="OU2sxNDE1YoKabK",
+                    platform=None,
+                    status="active",
+                ),
+                Proxy(
+                    type="http",
+                    host="136.162.138.66",
+                    port=47139,
+                    user="TI8inwlBAtrSVBR",
+                    pass_encrypted="YAPM4Ae4gSyQxEX",
+                    platform=None,
+                    status="active",
+                ),
+            ]
+            for p in initial_proxies:
+                session.add(p)
+            await session.commit()
+
+        # Initialize proxy rotators for all platforms
+        await build_platform_engines(session)
+
     task = asyncio.create_task(run_cleanup())
     yield
     task.cancel()
@@ -557,6 +588,113 @@ async def health():
 async def list_plans(session: AsyncSession = Depends(get_session)):
     result = await session.execute(select(Plan).where(Plan.active == True))  # noqa: E712
     return result.scalars().all()
+
+
+# ============================================================================
+# PROXY MANAGEMENT (Admin)
+# ============================================================================
+
+@app.get("/v1/admin/proxies")
+async def list_proxies(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    result = await session.execute(select(Proxy).order_by(Proxy.created_at.desc()))
+    proxies = result.scalars().all()
+    return [
+        {
+            "id": p.id,
+            "type": p.type,
+            "host": p.host,
+            "port": p.port,
+            "user": p.user,
+            "platform": p.platform,
+            "status": p.status,
+            "last_checked": p.last_checked,
+            "created_at": p.created_at,
+        }
+        for p in proxies
+    ]
+
+
+@app.post("/v1/admin/proxies")
+async def add_proxy(
+    type: str,
+    host: str,
+    port: int,
+    user: Optional[str] = None,
+    password: Optional[str] = None,
+    platform: Optional[str] = None,
+    current_user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    proxy = Proxy(
+        type=type,
+        host=host,
+        port=port,
+        user=user,
+        pass_encrypted=password,
+        platform=platform,
+        status="active",
+    )
+    session.add(proxy)
+    await session.commit()
+    await session.refresh(proxy)
+
+    # Rebuild proxy rotators to include new proxy
+    await build_platform_engines(session)
+
+    return {"id": proxy.id, "message": "Proxy added"}
+
+
+@app.delete("/v1/admin/proxies/{proxy_id}")
+async def delete_proxy(
+    proxy_id: int,
+    current_user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    result = await session.execute(select(Proxy).where(Proxy.id == proxy_id))
+    proxy = result.scalar_one_or_none()
+    if proxy is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proxy not found")
+
+    await session.delete(proxy)
+    await session.commit()
+
+    # Rebuild proxy rotators
+    await build_platform_engines(session)
+
+    return {"message": "Proxy deleted"}
+
+
+@app.patch("/v1/admin/proxies/{proxy_id}/toggle")
+async def toggle_proxy(
+    proxy_id: int,
+    current_user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    result = await session.execute(select(Proxy).where(Proxy.id == proxy_id))
+    proxy = result.scalar_one_or_none()
+    if proxy is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proxy not found")
+
+    proxy.status = "inactive" if proxy.status == "active" else "active"
+    await session.commit()
+
+    await build_platform_engines(session)
+
+    return {"id": proxy.id, "status": proxy.status}
 
 
 # ============================================================================
