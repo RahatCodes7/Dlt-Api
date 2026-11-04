@@ -1,4 +1,5 @@
 import Link from "next/link";
+import * as React from "react";
 import { Button } from "@/components/ui/button";
 import {
   Rocket,
@@ -141,7 +142,7 @@ export default function HomePage() {
               <h2 className="text-3xl font-bold">Available APIs</h2>
               <p className="text-muted-foreground mt-2">Access all platforms through a single unified API.</p>
             </div>
-            <Button asChild size="sm" variant="primary">
+            <Button asChild size="sm" variant="default">
   <Link href="/apis">View all APIs →</Link>
 </Button>
           </div>
@@ -149,7 +150,7 @@ export default function HomePage() {
             {platforms.map((p) => (
               <Link key={p.slug} href={`/apis/${p.slug}`} className="group block p-6 rounded-xl border border-border hover:border-primary/50 transition-all">
                 <div className="h-12 w-12 rounded-lg bg-primary/10 text-primary flex items-center justify-center mb-4 group-hover:bg-primary transition-colors">
-                  {p.icon}
+                  {React.createElement(p.icon as any)}
                 </div>
                 <h3 className="font-semibold mb-2">{p.name}</h3>
                 <p className="text-sm text-muted-foreground">{p.desc}</p>
@@ -167,7 +168,7 @@ export default function HomePage() {
             {features.map((f, i) => (
               <div key={i} className="p-6 rounded-xl border border-border bg-card">
                 <div className="h-10 w-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center mb-4">
-                  {f.icon}
+                  {React.createElement(f.icon as any)}
                 </div>
                 <h3 className="font-semibold mb-2">{f.title}</h3>
                 <p className="text-sm text-muted-foreground">{f.desc}</p>
@@ -205,7 +206,7 @@ export default function HomePage() {
             {stats.map((s) => (
               <div key={s.label} className="p-6 rounded-xl border border-border bg-card text-center">
                 <div className="h-10 w-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center mb-4 mx-auto">
-                  {s.icon}
+                  {React.createElement(s.icon as any)}
                 </div>
                 <div className="text-3xl font-bold">{s.value}</div>
                 <p className="text-sm text-muted-foreground mt-2">{s.label}</p>

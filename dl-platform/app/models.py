@@ -17,6 +17,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
+from datetime import datetime, timezone
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
+
 
 class User(Base):
     __tablename__ = "users"
@@ -24,10 +30,17 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    plan_id: Mapped[Optional[int]] = mapped_column(ForeignKey("plans.id"), nullable=True)
+    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    google_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(50), default="active")
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    email_verification_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    email_verification_expires: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    password_reset_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    password_reset_expires: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    role: Mapped[str] = mapped_column(String(50), default="user")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), onupdate=utc_now)
 
     plan = relationship("Plan", back_populates="users", lazy="selectin")
     api_keys = relationship("ApiKey", back_populates="user", lazy="selectin", cascade="all, delete-orphan")

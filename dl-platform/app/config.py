@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
     API_V1_STR: str = "/v1/dlt"
-    SECRET_KEY: str = "change-me-in-production"
+    SECRET_KEY: str = "change-me-in-production-32-chars"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
@@ -25,6 +25,34 @@ class Settings(BaseSettings):
     # Download limits
     DOWNLOAD_TIMEOUT_SECONDS: int = 60
     MAX_CONCURRENT_DOWNLOADS: int = 10
+
+    # Email (Resend)
+    RESEND_API_KEY: str = ""
+    RESEND_FROM_EMAIL: str = "noreply@yourdomain.com"
+    RESEND_FROM_NAME: str = "DELETE"
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASS: str = ""
+
+    # JWT
+    JWT_SECRET_KEY: str = "change-me-jwt-secret"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/v1/auth/google/callback"
+
+    # Frontend URL (for email links)
+    FRONTEND_URL: str = "http://localhost:3000"
+
+    # Argon2
+    ARGON2_TIME_COST: int = 3
+    ARGON2_MEMORY_COST: int = 65536
+    ARGON2_PARALLELISM: int = 4
 
     class Config:
         env_file = ".env"

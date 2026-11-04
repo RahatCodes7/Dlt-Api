@@ -5,26 +5,21 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/v1/dl
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE,
   headers: { "Content-Type": "application/json" },
+  withCredentials: true,
 });
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  if (typeof window !== "undefined") {
-    const token = localStorage.getItem("dlt_token");
-    if (token && config.headers) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-  }
+  // Cookies are sent automatically via withCredentials: true
   return config;
 });
 
 api.interceptors.response.use(
   (res) => res,
-  (err) => {
+  async (err) => {
     if (err.response?.status === 401) {
       if (typeof window !== "undefined") {
-        localStorage.removeItem("dlt_token");
-        localStorage.removeItem("dlt_user");
-        window.location.href = "/login";
+        // Token expired or invalid - redirect to login
+        window.location.href = "/login?expired=true";
       }
     }
     return Promise.reject(err);
