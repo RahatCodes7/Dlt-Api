@@ -41,6 +41,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(50), default="user")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), onupdate=utc_now)
+    plan_id: Mapped[Optional[int]] = mapped_column(ForeignKey("plans.id"), nullable=True)
 
     plan = relationship("Plan", back_populates="users", lazy="selectin")
     api_keys = relationship("ApiKey", back_populates="user", lazy="selectin", cascade="all, delete-orphan")
