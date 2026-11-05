@@ -1,5 +1,3 @@
-from gunicorn.conf import *  # noqa
-
 bind = f"0.0.0.0:{__import__('os').getenv('PORT', '8000')}"
 workers = int(__import__('os').getenv('GUNICORN_WORKERS', '2'))
 threads = int(__import__('os').getenv('GUNICORN_THREADS', '2'))
