@@ -75,7 +75,7 @@ const steps = [
   },
 ];
 
-const curlExample = `curl -X POST https://api.deleteapi.com/v1/dlt/youtube/info \\
+const curlExample = `curl -X POST https://dltapi.cc.cd/v1/dlt/youtube/info \\
   -H "Authorization: Bearer dl_live_xxxxxxxx" \\
   -H "Content-Type: application/json" \\
   -d '{

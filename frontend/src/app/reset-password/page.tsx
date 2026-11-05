@@ -5,8 +5,7 @@ import Link from "next/link";
 import { AlertCircle, CheckCircle2, Eye, EyeOff, Loader2, Lock } from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
 import { Input } from "@/components/ui/input";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL!;
+import { API_BASE } from "@/lib/api";
 
 function ResetPasswordContent() {
   const [code, setCode] = React.useState("");

@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import Field, model_validator
 from pydantic import AliasChoices
 from pydantic_settings import BaseSettings
@@ -61,13 +63,25 @@ class Settings(BaseSettings):
     # Google OAuth
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
-    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/v1/auth/google/callback"
+    # Must be on the frontend origin (the frontend proxies /v1 to this API).
+    # Add the exact value to the Google Cloud OAuth client's redirect URIs.
+    GOOGLE_REDIRECT_URI: str = "http://localhost:3000/v1/auth/google/callback"
+    GOOGLE_AUTH_URL: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    GOOGLE_TOKEN_URL: str = "https://oauth2.googleapis.com/token"
+    GOOGLE_USERINFO_URL: str = "https://www.googleapis.com/oauth2/v3/userinfo"
 
-    # Frontend URL (for email links)
+    # Frontend URL (for email links and OAuth redirects)
     FRONTEND_URL: str = "http://localhost:3000"
 
     # CORS (comma-separated origins). FRONTEND_URL is always allowed.
     CORS_ORIGINS: str = ""
+    # Optional regex for additional allowed origins, e.g. https://.*\\.yourdomain\\.com
+    CORS_ORIGIN_REGEX: str = ""
+
+    # Auth cookie policy. Empty values pick sensible defaults:
+    # SameSite=None + Secure in production, Lax on http local dev.
+    COOKIE_SAMESITE: str = ""
+    COOKIE_SECURE: Optional[bool] = None
 
     # Emails that should be granted the admin role on registration
     ADMIN_EMAILS: str = ""

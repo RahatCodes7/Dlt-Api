@@ -4,7 +4,7 @@ import { CodeWindow } from "@/components/marketing/code-window";
 import { platforms } from "@/lib/content";
 
 const requestExample = `# All platforms share the same contract
-curl -X POST https://api.deleteapi.com/v1/dlt/{platform}/info \\
+curl -X POST https://dltapi.cc.cd/v1/dlt/{platform}/info \\
   -H "Authorization: Bearer dl_live_xxxxxxxx" \\
   -H "Content-Type: application/json" \\
   -d '{ "url": "https://…" }'`;

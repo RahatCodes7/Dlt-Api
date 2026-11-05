@@ -1,39 +1,152 @@
+"use client";
+
+import * as React from "react";
 import Link from "next/link";
-import { CheckCircle2, CreditCard, Download, Gauge, Receipt, Zap } from "lucide-react";
+import { CheckCircle2, CreditCard, Gauge, Loader2, Receipt, Zap } from "lucide-react";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { plans } from "@/lib/content";
+import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-const invoices = [
-  { id: "INV-2026-0912", period: "Sep 15 – Oct 14, 2026", total: "$9.00", status: "Paid" },
-  { id: "INV-2026-0812", period: "Aug 15 – Sep 14, 2026", total: "$9.00", status: "Paid" },
-  { id: "INV-2026-0712", period: "Jul 15 – Aug 14, 2026", total: "$9.00", status: "Paid" },
-];
+interface SubscriptionData {
+  user: { email: string; plan: string | null };
+  plan: { id: number; name: string; monthly_requests: number; price: number | null } | null;
+  quota: {
+    limit: number;
+    used: number;
+    remaining: number;
+    reset_at: string | null;
+  };
+  subscription: {
+    status: string;
+    start: string | null;
+    end: string | null;
+    auto_renew: boolean;
+  } | null;
+  transactions: {
+    id: number;
+    amount: number;
+    currency: string;
+    method: string;
+    status: string;
+    ref: string | null;
+    created_at: string | null;
+  }[];
+}
+
+const formatDate = (value: string | null) => {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+};
+
+const formatMoney = (amount: number, currency: string) => {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency || "USD",
+    }).format(amount);
+  } catch {
+    return `${amount} ${currency}`;
+  }
+};
 
 export default function MySubscriptionPage() {
-  const used = 4230;
-  const quota = 5000;
-  const pct = Math.round((used / quota) * 100);
+  const [data, setData] = React.useState<SubscriptionData | null>(null);
+  const [error, setError] = React.useState("");
+  const [loading, setLoading] = React.useState(true);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setData(await apiFetch<SubscriptionData>("/v1/session/account/subscription"));
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Could not load your subscription");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    load();
+  }, [load]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <span className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading your subscription…
+        </span>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div>
+        <PageHeader eyebrow="Billing" title="My subscription" />
+        <div className="surface flex flex-col items-center p-10 text-center">
+          <p className="text-sm text-muted-foreground">{error || "Something went wrong."}</p>
+          <button type="button" onClick={load} className="btn btn-primary mt-4">
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const plan = data.plan;
+  const { quota, subscription, transactions } = data;
+  const planName = plan?.name ?? data.user.plan ?? "Free";
+  const price = plan?.price ?? 0;
+  const pct = quota.limit > 0 ? Math.min(Math.round((quota.used / quota.limit) * 100), 100) : 0;
+  const status = subscription?.status ?? "active";
 
   return (
     <div>
       <PageHeader
         eyebrow="Billing"
         title="My subscription"
-        description="Review your plan, usage, and billing history — upgrade or cancel at any time."
+        description="Your current plan, quota, and payment history."
         actions={
           <Link href="/dashboard/pricing-plans" className="btn btn-primary">
-            <Zap className="h-4 w-4" /> Change plan
+            <Zap className="h-4 w-4" /> Compare plans
           </Link>
         }
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Current plan" value="Starter" hint="$9 / month" icon={CreditCard} tone="primary" />
-        <StatCard label="Requests used" value={`${used.toLocaleString()}`} hint={`of ${quota.toLocaleString()}`} icon={Gauge} tone="amber" />
-        <StatCard label="Next invoice" value="$9.00" hint="Oct 15, 2026" icon={Receipt} tone="blue" />
-        <StatCard label="Status" value="Active" hint="auto-renews" icon={CheckCircle2} tone="accent" />
+        <StatCard
+          label="Current plan"
+          value={planName}
+          hint={price > 0 ? `$${price} / month` : "No charge"}
+          icon={CreditCard}
+          tone="primary"
+        />
+        <StatCard
+          label="Requests used"
+          value={quota.used.toLocaleString()}
+          hint={`of ${quota.limit.toLocaleString()}`}
+          icon={Gauge}
+          tone="amber"
+        />
+        <StatCard
+          label="Quota resets"
+          value={formatDate(quota.reset_at)}
+          hint={`${quota.remaining.toLocaleString()} remaining`}
+          icon={Receipt}
+          tone="blue"
+        />
+        <StatCard
+          label="Status"
+          value={status.charAt(0).toUpperCase() + status.slice(1)}
+          hint={subscription?.auto_renew ? "auto-renews" : "manual renewal"}
+          icon={CheckCircle2}
+          tone="accent"
+        />
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
@@ -41,15 +154,18 @@ export default function MySubscriptionPage() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-4">
               <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-lg font-bold text-primary">
-                S
+                {planName.charAt(0).toUpperCase()}
               </span>
               <div>
-                <h2 className="text-lg font-bold">Starter plan</h2>
-                <p className="text-sm text-muted-foreground">$9 / month · renews Oct 15, 2026</p>
+                <h2 className="text-lg font-bold">{planName} plan</h2>
+                <p className="text-sm text-muted-foreground">
+                  {price > 0 ? `$${price} / month` : "Free"} ·{" "}
+                  {subscription?.end ? `renews ${formatDate(subscription.end)}` : "no renewal date"}
+                </p>
               </div>
             </div>
-            <span className="w-fit rounded-full bg-accent/10 px-3 py-1 text-xs font-semibold text-accent">
-              Active
+            <span className="w-fit rounded-full bg-accent/10 px-3 py-1 text-xs font-semibold capitalize text-accent">
+              {status}
             </span>
           </div>
 
@@ -57,7 +173,7 @@ export default function MySubscriptionPage() {
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Monthly request allowance</span>
               <span className="font-semibold">
-                {used.toLocaleString()} / {quota.toLocaleString()}
+                {quota.used.toLocaleString()} / {quota.limit.toLocaleString()}
               </span>
             </div>
             <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-muted">
@@ -67,16 +183,16 @@ export default function MySubscriptionPage() {
               />
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
-              {pct}% used · resets in 12 days. Overages are never billed silently.
+              {pct}% used · resets {formatDate(quota.reset_at)}. Overages are never billed silently.
             </p>
           </div>
 
           <dl className="mt-6 grid gap-4 border-t border-border pt-5 sm:grid-cols-2">
             {[
-              ["Billing email", "dev@example.com"],
-              ["Payment method", "Visa ending 4242"],
+              ["Billing email", data.user.email],
               ["Billing cycle", "Monthly"],
-              ["Member since", "Jul 15, 2026"],
+              ["Started", subscription ? formatDate(subscription.start) : "—"],
+              ["Auto renew", subscription?.auto_renew ? "On" : "Off"],
             ].map(([label, value]) => (
               <div key={label}>
                 <dt className="text-xs text-muted-foreground">{label}</dt>
@@ -86,19 +202,24 @@ export default function MySubscriptionPage() {
           </dl>
 
           <div className="mt-6 flex flex-wrap gap-2 border-t border-border pt-5">
-            <button type="button" className="btn btn-outline">
-              Update payment method
-            </button>
-            <button type="button" className="btn btn-ghost text-destructive hover:bg-destructive/10">
-              Cancel subscription
-            </button>
+            <Link href="/dashboard/pricing-plans" className="btn btn-outline">
+              View available plans
+            </Link>
+            <Link href="/contact" className="btn btn-ghost">
+              Contact billing
+            </Link>
           </div>
         </div>
 
         <div className="surface p-6">
-          <h2 className="font-semibold">Included in Starter</h2>
+          <h2 className="font-semibold">Included in {planName}</h2>
           <ul className="mt-4 space-y-2.5">
-            {["All 4 platforms", "Priority rate limits", "Usage analytics", "Email support"].map((feature) => (
+            {[
+              "All 4 platforms",
+              `${quota.limit.toLocaleString()} requests per month`,
+              "Usage analytics and logs",
+              "Email support",
+            ].map((feature) => (
               <li key={feature} className="flex items-start gap-2 text-sm">
                 <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
                 {feature}
@@ -106,7 +227,7 @@ export default function MySubscriptionPage() {
             ))}
           </ul>
           <div className="mt-5 rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
-            Need more volume? Pro includes 25,000 requests, proxy rotation, and priority support.
+            Need more volume? Compare plans to see higher request allowances.
           </div>
           <Link href="/dashboard/pricing-plans" className="btn btn-primary mt-4 w-full">
             Compare plans
@@ -117,61 +238,84 @@ export default function MySubscriptionPage() {
       <div className="surface mt-4 overflow-hidden">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <div>
-            <h2 className="font-semibold">Billing history</h2>
-            <p className="text-xs text-muted-foreground">Receipts for every charge.</p>
+            <h2 className="font-semibold">Payment history</h2>
+            <p className="text-xs text-muted-foreground">Transactions recorded on your account.</p>
           </div>
-          <Link href="/dashboard/invoices" className="text-xs font-semibold text-primary hover:underline">
-            All invoices
+          <Link
+            href="/dashboard/transactions"
+            className="text-xs font-semibold text-primary hover:underline"
+          >
+            All transactions
           </Link>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[520px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-border text-[11px] uppercase tracking-wider text-muted-foreground">
-                <th className="px-5 py-3 font-semibold">Invoice</th>
-                <th className="px-5 py-3 font-semibold">Period</th>
-                <th className="px-5 py-3 font-semibold">Total</th>
-                <th className="px-5 py-3 font-semibold">Status</th>
-                <th className="px-5 py-3 text-right font-semibold">Receipt</th>
-              </tr>
-            </thead>
-            <tbody>
-              {invoices.map((invoice) => (
-                <tr key={invoice.id} className="border-b border-border/70 last:border-0 hover:bg-muted/40">
-                  <td className="px-5 py-3 font-mono text-xs">{invoice.id}</td>
-                  <td className="px-5 py-3 text-muted-foreground">{invoice.period}</td>
-                  <td className="px-5 py-3 font-medium">{invoice.total}</td>
-                  <td className="px-5 py-3 text-xs font-semibold text-accent">{invoice.status}</td>
-                  <td className="px-5 py-3 text-right">
-                    <button type="button" className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
-                      <Download className="h-3.5 w-3.5" /> PDF
-                    </button>
-                  </td>
+        {transactions.length === 0 ? (
+          <div className="px-5 py-10 text-center text-sm text-muted-foreground">
+            No payments recorded yet. Your plan does not require a payment.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-border text-[11px] uppercase tracking-wider text-muted-foreground">
+                  <th className="px-5 py-3 font-semibold">Reference</th>
+                  <th className="px-5 py-3 font-semibold">Date</th>
+                  <th className="px-5 py-3 font-semibold">Method</th>
+                  <th className="px-5 py-3 font-semibold">Total</th>
+                  <th className="px-5 py-3 text-right font-semibold">Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {transactions.map((tx) => (
+                  <tr
+                    key={tx.id}
+                    className="border-b border-border/70 last:border-0 hover:bg-muted/40"
+                  >
+                    <td className="px-5 py-3 font-mono text-xs">{tx.ref || `#${tx.id}`}</td>
+                    <td className="px-5 py-3 text-muted-foreground">
+                      {formatDate(tx.created_at)}
+                    </td>
+                    <td className="px-5 py-3 capitalize">{tx.method}</td>
+                    <td className="px-5 py-3 font-medium">
+                      {formatMoney(tx.amount, tx.currency)}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <span
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                          tx.status === "completed"
+                            ? "bg-accent/10 text-accent"
+                            : "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+                        )}
+                      >
+                        {tx.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div className="mt-8">
-        <h2 className="text-lg font-bold">Switch plan</h2>
+        <h2 className="text-lg font-bold">Available plans</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Changes apply immediately and are prorated against your current cycle.
+          Compare request allowances before choosing a plan.
         </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {plans.map((plan) => {
-            const current = plan.name === "Starter";
+          {plans.map((item) => {
+            const current = item.name.toLowerCase() === planName.toLowerCase();
             return (
               <div
-                key={plan.name}
+                key={item.name}
                 className={cn(
                   "surface flex flex-col p-5",
                   current && "border-primary ring-1 ring-primary",
                 )}
               >
                 <div className="flex items-center justify-between">
-                  <h3 className="font-semibold">{plan.name}</h3>
+                  <h3 className="font-semibold">{item.name}</h3>
                   {current && (
                     <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary">
                       Current
@@ -179,20 +323,20 @@ export default function MySubscriptionPage() {
                   )}
                 </div>
                 <p className="mt-2 text-2xl font-bold">
-                  {plan.price === null ? "Custom" : `$${plan.price}`}
-                  {plan.price !== null && (
+                  {item.price === null ? "Custom" : `$${item.price}`}
+                  {item.price !== null && (
                     <span className="text-sm font-normal text-muted-foreground">/mo</span>
                   )}
                 </p>
-                <p className="mt-1 text-xs text-muted-foreground">{plan.requests}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{item.requests}</p>
                 <Link
-                  href={current ? "/dashboard/pricing-plans" : plan.href}
+                  href={item.href}
                   className={cn(
                     "btn mt-4 w-full",
-                    current ? "btn-outline" : plan.featured ? "btn-primary" : "btn-outline",
+                    item.featured ? "btn-primary" : "btn-outline",
                   )}
                 >
-                  {current ? "Manage" : plan.cta}
+                  {current ? "View plan" : item.cta}
                 </Link>
               </div>
             );

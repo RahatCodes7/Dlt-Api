@@ -16,8 +16,7 @@ import {
 } from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
 import { Input } from "@/components/ui/input";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL!;
+import { API_BASE } from "@/lib/api";
 
 function strength(password: string) {
   let score = 0;

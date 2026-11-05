@@ -48,6 +48,10 @@ class ResetPasswordRequest(BaseModel):
     new_password: str
 
 
+class ProfileUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
 # ---- Auth / API keys ----
 class ApiKeyCreate(BaseModel):
     name: Optional[str] = None

@@ -3,8 +3,7 @@
 import * as React from "react";
 import { Check, Copy, Play, RotateCcw, Terminal, Loader2 } from "lucide-react";
 import { platforms } from "@/lib/content";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL!;
+import { API_BASE, PUBLIC_API_URL } from "@/lib/api";
 
 interface Result {
   status: number;
@@ -32,7 +31,7 @@ export function Playground() {
       endpoint === "download"
         ? `{ "url": "${url}", "format": "${format}" }`
         : `{ "url": "${url}" }`;
-    return `curl -X POST ${API_BASE}${requestPath} \\\n  -H "Authorization: Bearer ${
+    return `curl -X POST ${PUBLIC_API_URL}${requestPath} \\\n  -H "Authorization: Bearer ${
       apiKey || "dl_live_xxxxxxxx"
     }" \\\n  -H "Content-Type: application/json" \\\n  -d '${body}'`;
   }, [apiKey, endpoint, format, requestPath, url]);

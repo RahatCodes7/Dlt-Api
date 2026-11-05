@@ -23,8 +23,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { DashboardShell, type NavGroup, type NavItem } from "@/components/dashboard/shell";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL!;
+import { API_BASE } from "@/lib/api";
 
 const navItems: NavItem[] = [
   { name: "Overview", href: "/admin/dashboard", icon: LayoutDashboard, group: "overview" },
@@ -77,9 +76,16 @@ const groups: NavGroup[] = [
   { key: "settings", label: "Settings" },
 ];
 
+interface AdminUser {
+  name: string | null;
+  email: string;
+  plan: string | null;
+}
+
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [allowed, setAllowed] = React.useState<boolean | null>(null);
+  const [me, setMe] = React.useState<AdminUser | null>(null);
 
   React.useEffect(() => {
     let active = true;
@@ -91,6 +97,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           router.replace("/dashboard");
           setAllowed(false);
         } else {
+          setMe(data);
           setAllowed(true);
         }
       })
@@ -113,7 +120,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       navItems={navItems}
       groups={groups}
       roleLabel="Admin"
-      user={{ name: "Admin", email: "admin@deleteapi.com" }}
+      planLabel={me?.plan ?? undefined}
+      user={{
+        name: me?.name || me?.email?.split("@")[0] || "Admin",
+        email: me?.email || "",
+      }}
     >
       {children}
     </DashboardShell>

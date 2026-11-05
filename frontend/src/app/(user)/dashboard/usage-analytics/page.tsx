@@ -1,35 +1,120 @@
+"use client";
+
+import * as React from "react";
 import Link from "next/link";
-import { Activity, BarChart3, CheckCircle2, Gauge, Timer } from "lucide-react";
+import { Activity, BarChart3, CheckCircle2, Gauge, Loader2, Timer } from "lucide-react";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { UsageAreaChart } from "@/components/dashboard/charts";
-import { usageData } from "@/lib/usage";
+import { apiFetch } from "@/lib/api";
 
-const platformUsage = [
-  { name: "YouTube", requests: 1940, pct: 45, bar: "bg-red-500" },
-  { name: "Instagram", requests: 1294, pct: 30, bar: "bg-pink-500" },
-  { name: "Facebook", requests: 647, pct: 15, bar: "bg-blue-500" },
-  { name: "TikTok", requests: 431, pct: 10, bar: "bg-foreground" },
-];
+interface UsageData {
+  totals: {
+    total: number;
+    errors: number;
+    success_rate: number;
+    last_7_days: number;
+  };
+  days: { date: string; day: string; requests: number; errors: number }[];
+  platforms: { platform: string; requests: number; percentage: number }[];
+  recent_errors: {
+    id: number;
+    platform: string;
+    url: string | null;
+    status: string;
+    created_at: string | null;
+  }[];
+  quota: {
+    limit: number;
+    used: number;
+    remaining: number;
+    reset_at: string | null;
+  };
+}
 
-const endpoints = [
-  { path: "/v1/dlt/youtube/download", calls: 1820, latency: "912ms", success: "97.4%" },
-  { path: "/v1/dlt/instagram/info", calls: 1104, latency: "184ms", success: "99.1%" },
-  { path: "/v1/dlt/youtube/info", calls: 842, latency: "142ms", success: "99.6%" },
-  { path: "/v1/dlt/tiktok/download", calls: 431, latency: "1.2s", success: "94.8%" },
-  { path: "/v1/dlt/facebook/info", calls: 115, latency: "368ms", success: "98.2%" },
-];
+const platformNames: Record<string, string> = {
+  youtube: "YouTube",
+  instagram: "Instagram",
+  facebook: "Facebook",
+  tiktok: "TikTok",
+};
 
-const weekdays = usageData.map((day) => day.day);
-const weekTotal = usageData.reduce((sum, day) => sum + day.requests, 0);
+const formatDate = (value: string | null) => {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+};
+
+const formatTime = (value: string | null) => {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+};
 
 export default function UsageAnalyticsPage() {
+  const [data, setData] = React.useState<UsageData | null>(null);
+  const [error, setError] = React.useState("");
+  const [loading, setLoading] = React.useState(true);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setData(await apiFetch<UsageData>("/v1/session/account/usage"));
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Could not load usage analytics");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    load();
+  }, [load]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <span className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading analytics…
+        </span>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div>
+        <PageHeader eyebrow="Analytics" title="Usage analytics" />
+        <div className="surface flex flex-col items-center p-10 text-center">
+          <Timer className="h-6 w-6 text-destructive" />
+          <p className="mt-3 text-sm text-muted-foreground">{error || "Something went wrong."}</p>
+          <button type="button" onClick={load} className="btn btn-primary mt-4">
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const { totals, days, platforms, recent_errors: recentErrors, quota } = data;
+  const quotaPct =
+    quota.limit > 0 ? Math.min(Math.round((quota.used / quota.limit) * 100), 100) : 0;
+  const hasChartData = days.some((day) => day.requests > 0);
+
   return (
     <div>
       <PageHeader
         eyebrow="Analytics"
         title="Usage analytics"
-        description="Request volume, latency, and success rate across every platform you use."
+        description="Request volume, success rate, and platform mix from your real API traffic."
         actions={
           <Link href="/dashboard/request-logs" className="btn btn-outline">
             View request logs
@@ -38,10 +123,34 @@ export default function UsageAnalyticsPage() {
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Requests this week" value={weekTotal.toLocaleString()} hint="+18.2% vs last week" change={{ value: "18.2%", positive: true }} icon={Activity} tone="primary" />
-        <StatCard label="Success rate" value="98.4%" hint="last 30 days" change={{ value: "0.6%", positive: true }} icon={CheckCircle2} tone="accent" />
-        <StatCard label="Median latency" value="186ms" hint="info endpoints" change={{ value: "12ms", positive: true }} icon={Timer} tone="blue" />
-        <StatCard label="Quota used" value="84%" hint="4,230 of 5,000" icon={Gauge} tone="amber" />
+        <StatCard
+          label="Requests this week"
+          value={totals.total.toLocaleString()}
+          hint="last 7 days"
+          icon={Activity}
+          tone="primary"
+        />
+        <StatCard
+          label="Success rate"
+          value={`${totals.success_rate}%`}
+          hint="last 7 days"
+          icon={CheckCircle2}
+          tone="accent"
+        />
+        <StatCard
+          label="Failed requests"
+          value={totals.errors.toLocaleString()}
+          hint="last 7 days"
+          icon={Timer}
+          tone="rose"
+        />
+        <StatCard
+          label="Quota used"
+          value={`${quotaPct}%`}
+          hint={`${quota.used.toLocaleString()} of ${quota.limit.toLocaleString()}`}
+          icon={Gauge}
+          tone="amber"
+        />
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
@@ -60,44 +169,79 @@ export default function UsageAnalyticsPage() {
               </span>
             </div>
           </div>
-          <UsageAreaChart />
-          <div className="mt-3 grid grid-cols-4 gap-1 text-center text-[11px] text-muted-foreground sm:grid-cols-7">
-            {weekdays.map((day) => (
-              <span key={day}>{day}</span>
-            ))}
-          </div>
+          {hasChartData ? (
+            <>
+              <UsageAreaChart data={days} />
+              <div className="mt-3 grid grid-cols-4 gap-1 text-center text-[11px] text-muted-foreground sm:grid-cols-7">
+                {days.map((day) => (
+                  <span key={day.date}>{day.day}</span>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="flex h-64 flex-col items-center justify-center rounded-lg border border-dashed border-border text-center">
+              <Activity className="h-5 w-5 text-muted-foreground" />
+              <p className="mt-2 text-sm font-medium">No traffic in this period</p>
+              <p className="mt-1 max-w-xs text-xs text-muted-foreground">
+                Analytics fill in as soon as you make requests with an API key.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="space-y-4">
           <div className="surface p-5">
             <h2 className="font-semibold">Platform mix</h2>
-            <div className="mt-4 space-y-4">
-              {platformUsage.map((platform) => (
-                <div key={platform.name}>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-medium">{platform.name}</span>
-                    <span className="font-mono text-muted-foreground">{platform.requests.toLocaleString()}</span>
-                  </div>
-                  <div className="mt-1.5 flex items-center gap-2">
-                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
-                      <div className={`h-full rounded-full ${platform.bar}`} style={{ width: `${platform.pct}%` }} />
+            {platforms.length === 0 ? (
+              <p className="mt-4 text-sm text-muted-foreground">No platform traffic yet.</p>
+            ) : (
+              <div className="mt-4 space-y-4">
+                {platforms.map((platform) => {
+                  const name = platformNames[platform.platform] ?? platform.platform;
+                  return (
+                    <div key={platform.platform}>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-medium">{name}</span>
+                        <span className="font-mono text-muted-foreground">
+                          {platform.requests.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-2">
+                        <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-primary"
+                            style={{ width: `${platform.percentage}%` }}
+                          />
+                        </div>
+                        <span className="w-8 text-right text-xs text-muted-foreground">
+                          {platform.percentage}%
+                        </span>
+                      </div>
                     </div>
-                    <span className="w-8 text-right text-xs text-muted-foreground">{platform.pct}%</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="surface p-5">
             <div className="flex items-center justify-between">
               <h2 className="font-semibold">Quota</h2>
-              <span className="text-xs text-muted-foreground">resets in 12 days</span>
+              <span className="text-xs text-muted-foreground">
+                resets {formatDate(quota.reset_at)}
+              </span>
             </div>
-            <p className="mt-3 text-3xl font-bold">4,230</p>
-            <p className="text-xs text-muted-foreground">of 5,000 requests used</p>
+            <p className="mt-3 text-3xl font-bold">{quota.used.toLocaleString()}</p>
+            <p className="text-xs text-muted-foreground">
+              of {quota.limit.toLocaleString()} requests used
+            </p>
             <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-muted">
-              <div className="h-full w-[84%] rounded-full bg-amber-500" />
+              <div
+                className={`h-full rounded-full ${
+                  quotaPct > 85 ? "bg-destructive" : quotaPct > 60 ? "bg-amber-500" : "bg-primary"
+                }`}
+                style={{ width: `${quotaPct}%` }}
+              />
             </div>
             <Link href="/dashboard/my-subscription" className="btn btn-outline mt-4 w-full">
               Increase quota
@@ -110,48 +254,55 @@ export default function UsageAnalyticsPage() {
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <div>
             <h2 className="flex items-center gap-2 font-semibold">
-              <BarChart3 className="h-4 w-4 text-primary" /> Top endpoints
+              <BarChart3 className="h-4 w-4 text-primary" /> Recent errors
             </h2>
-            <p className="text-xs text-muted-foreground">Volume, latency, and success rate this month</p>
+            <p className="text-xs text-muted-foreground">Requests that returned an error</p>
           </div>
-          <Link href="/dashboard/request-logs" className="text-xs font-semibold text-primary hover:underline">
-            Full logs
+          <Link
+            href="/dashboard/error-logs"
+            className="text-xs font-semibold text-primary hover:underline"
+          >
+            Full error logs
           </Link>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[560px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-border text-[11px] uppercase tracking-wider text-muted-foreground">
-                <th className="px-5 py-3 font-semibold">Endpoint</th>
-                <th className="px-5 py-3 font-semibold">Calls</th>
-                <th className="px-5 py-3 font-semibold">Avg latency</th>
-                <th className="px-5 py-3 font-semibold">Success</th>
-                <th className="px-5 py-3" />
-              </tr>
-            </thead>
-            <tbody>
-              {endpoints.map((endpoint) => (
-                <tr key={endpoint.path} className="border-b border-border/70 last:border-0 hover:bg-muted/40">
-                  <td className="px-5 py-3 font-mono text-xs">{endpoint.path}</td>
-                  <td className="px-5 py-3 font-mono text-xs">{endpoint.calls.toLocaleString()}</td>
-                  <td className="px-5 py-3 text-muted-foreground">{endpoint.latency}</td>
-                  <td className="px-5 py-3">
-                    <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold text-accent">
-                      {endpoint.success}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3 text-right">
-                    <Link
-                      href={`/dashboard/api-playground?endpoint=${encodeURIComponent(endpoint.path)}`}
-                      className="text-xs font-semibold text-primary hover:underline"
-                    >
-                      Test
-                    </Link>
-                  </td>
+          {recentErrors.length === 0 ? (
+            <div className="px-5 py-10 text-center text-sm text-muted-foreground">
+              No errors recorded. Nice and clean.
+            </div>
+          ) : (
+            <table className="w-full min-w-[560px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-border text-[11px] uppercase tracking-wider text-muted-foreground">
+                  <th className="px-5 py-3 font-semibold">Platform</th>
+                  <th className="px-5 py-3 font-semibold">URL</th>
+                  <th className="px-5 py-3 font-semibold">When</th>
+                  <th className="px-5 py-3 text-right font-semibold">Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {recentErrors.map((item) => (
+                  <tr
+                    key={item.id}
+                    className="border-b border-border/70 last:border-0 hover:bg-muted/40"
+                  >
+                    <td className="px-5 py-3 font-medium capitalize">{item.platform}</td>
+                    <td className="max-w-[320px] truncate px-5 py-3 font-mono text-xs text-muted-foreground">
+                      {item.url || "—"}
+                    </td>
+                    <td className="px-5 py-3 text-muted-foreground">
+                      {formatTime(item.created_at)}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-semibold text-destructive">
+                        Error
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>

@@ -20,17 +20,17 @@ const nav = [
 ];
 
 const setupCode = `# 1. Create an account
-open https://deleteapi.com/register
+open https://dltapi.cc.cd/register
 
 # 2. Generate a key in Dashboard → API Keys
 
 # 3. Make your first request
-curl -X POST https://api.deleteapi.com/v1/dlt/youtube/info \\
+curl -X POST https://dltapi.cc.cd/v1/dlt/youtube/info \\
   -H "Authorization: Bearer dl_live_xxxxxxxx" \\
   -H "Content-Type: application/json" \\
   -d '{ "url": "https://youtube.com/watch?v=dQw4w9WgXcQ" }'`;
 
-const authCode = `curl https://api.deleteapi.com/v1/dlt/account/quota \\
+const authCode = `curl https://dltapi.cc.cd/v1/dlt/account/quota \\
   -H "Authorization: Bearer dl_live_xxxxxxxx"
 
 # 200 OK

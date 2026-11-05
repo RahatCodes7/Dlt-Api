@@ -1,7 +1,17 @@
 import axios, { AxiosInstance } from "axios";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL!;
+/**
+ * Browser requests go to the same origin (`/v1/...`). Next.js rewrites that
+ * path to the FastAPI backend (see next.config.ts), so session cookies are
+ * first-party and CORS never gets in the way.
+ */
+export const API_BASE = "";
+
+/**
+ * Absolute API URL used in documentation and quick-start snippets.
+ */
+export const PUBLIC_API_URL =
+  process.env.NEXT_PUBLIC_SITE_URL || "https://dltapi.cc.cd";
 
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE,
@@ -26,7 +36,12 @@ export async function apiFetch<T>(
 
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as ApiError;
-    throw new Error(data.detail || `Request failed (${response.status})`);
+    const detail = data.detail;
+    throw new Error(
+      typeof detail === "string"
+        ? detail
+        : `Request failed (${response.status})`,
+    );
   }
 
   if (response.status === 204) return undefined as T;

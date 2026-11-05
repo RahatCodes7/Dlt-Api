@@ -6,8 +6,18 @@ import { useRouter } from "next/navigation";
 import { AlertCircle, ArrowRight, Eye, EyeOff, Loader2, Lock, Mail } from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
 import { Input } from "@/components/ui/input";
+import { API_BASE } from "@/lib/api";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL!;
+const OAUTH_ERRORS: Record<string, string> = {
+  google_not_configured:
+    "Google sign-in is not configured on the server yet. Use email and password for now.",
+  google_cancelled: "Google sign-in was cancelled.",
+  google_state_mismatch: "Google sign-in expired. Please try again.",
+  google_exchange_failed: "Google could not complete sign-in. Please try again.",
+  google_no_email: "Your Google account did not share an email address.",
+  google_email_unverified: "Your Google email address is not verified.",
+  account_inactive: "This account is not active. Contact support for help.",
+};
 
 export default function LoginPage() {
   const router = useRouter();
@@ -17,6 +27,13 @@ export default function LoginPage() {
   const [remember, setRemember] = React.useState(true);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
+
+  React.useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("error");
+    if (!code) return;
+    setError(OAUTH_ERRORS[code] ?? "Sign-in failed. Please try again.");
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -34,6 +51,7 @@ export default function LoginPage() {
         setError(data.detail || "Login failed. Check your email and password.");
         return;
       }
+      router.refresh();
       if (data.user?.role === "admin") {
         router.push("/admin/dashboard");
       } else {

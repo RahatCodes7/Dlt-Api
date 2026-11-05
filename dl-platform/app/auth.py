@@ -72,13 +72,33 @@ def verify_token(token: str) -> Optional[dict]:
         return None
 
 
+def cookie_policy() -> tuple[bool, str]:
+    """Return (secure, samesite) for auth cookies.
+
+    Production frontends are often served from a different origin than the API.
+    Those cookies need SameSite=None; Secure, otherwise browsers store them but
+    never send them back with cross-origin fetch calls.
+    """
+    https_frontend = settings.FRONTEND_URL.lower().startswith("https://")
+    secure = settings.COOKIE_SECURE if settings.COOKIE_SECURE is not None else https_frontend
+    samesite = (settings.COOKIE_SAMESITE or ("none" if https_frontend else "lax")).strip().lower()
+    if samesite not in {"lax", "strict", "none"}:
+        samesite = "lax"
+    if samesite == "none" and not secure:
+        # Browsers reject SameSite=None without Secure, so fall back instead of
+        # silently dropping the session cookie on http.
+        samesite = "lax"
+    return secure, samesite
+
+
 def set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+    secure, samesite = cookie_policy()
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=not settings.DEBUG,
-        samesite="lax",
+        secure=secure,
+        samesite=samesite,
         max_age=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         path="/",
     )
@@ -86,8 +106,8 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str) 
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        secure=not settings.DEBUG,
-        samesite="lax",
+        secure=secure,
+        samesite=samesite,
         max_age=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
         path="/",
     )

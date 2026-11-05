@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Bell,
   ChevronRight,
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { API_BASE } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export interface NavItem {
@@ -46,6 +47,8 @@ export function DashboardShell({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const [signingOut, setSigningOut] = React.useState(false);
   const [openPath, setOpenPath] = React.useState<string | null>(null);
   const open = openPath === pathname;
   const setOpen = (value: boolean) => setOpenPath(value ? pathname : null);
@@ -68,6 +71,22 @@ export function DashboardShell({
     .slice(0, 2)
     .join("")
     .toUpperCase();
+
+  const signOut = async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await fetch(`${API_BASE}/v1/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      /* The cookie may still be cleared server-side; go to sign in anyway. */
+    } finally {
+      router.replace("/login");
+      router.refresh();
+    }
+  };
 
   const sidebar = (
     <div className="flex h-full flex-col bg-card">
@@ -165,12 +184,14 @@ export function DashboardShell({
             <Settings className="h-4 w-4" />
           </Link>
         </div>
-        <Link
-          href="/login"
-          className="mt-2 flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+        <button
+          type="button"
+          onClick={signOut}
+          disabled={signingOut}
+          className="mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-60"
         >
-          <LogOut className="h-3.5 w-3.5" /> Sign out
-        </Link>
+          <LogOut className="h-3.5 w-3.5" /> {signingOut ? "Signing out…" : "Sign out"}
+        </button>
       </div>
     </div>
   );

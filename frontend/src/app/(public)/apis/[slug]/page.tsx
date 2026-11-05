@@ -17,14 +17,14 @@ export default async function PlatformAPIPage({
   const platform = platforms.find((item) => item.slug === slug);
   if (!platform) notFound();
 
-  const infoExample = `curl -X POST https://api.deleteapi.com/v1/dlt/${platform.slug}/info \\
+  const infoExample = `curl -X POST https://dltapi.cc.cd/v1/dlt/${platform.slug}/info \\
   -H "Authorization: Bearer dl_live_xxxxxxxx" \\
   -H "Content-Type: application/json" \\
   -d '{
     "url": "https://${platform.slug}.com/…"
   }'`;
 
-  const downloadExample = `curl -X POST https://api.deleteapi.com/v1/dlt/${platform.slug}/download \\
+  const downloadExample = `curl -X POST https://dltapi.cc.cd/v1/dlt/${platform.slug}/download \\
   -H "Authorization: Bearer dl_live_xxxxxxxx" \\
   -H "Content-Type: application/json" \\
   -d '{

@@ -4,9 +4,8 @@ import * as React from "react";
 import Link from "next/link";
 import { ArrowRight, Check, Copy, KeyRound, Play, Rocket, Terminal } from "lucide-react";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { PUBLIC_API_URL } from "@/lib/api";
 import { cn } from "@/lib/utils";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL!;
 
 const steps = [
   {
@@ -30,14 +29,14 @@ const steps = [
 ];
 
 const snippets: Record<string, string> = {
-  cURL: `curl -X POST ${API_BASE}/v1/dlt/youtube/info \\
+  cURL: `curl -X POST ${PUBLIC_API_URL}/v1/dlt/youtube/info \\
   -H "Authorization: Bearer $DLT_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'`,
   Python: `import os, requests
 
 response = requests.post(
-    "${API_BASE}/v1/dlt/youtube/info",
+    "${PUBLIC_API_URL}/v1/dlt/youtube/info",
     headers={"Authorization": f"Bearer {os.environ['DLT_API_KEY']}"},
     json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
     timeout=30,
@@ -45,7 +44,7 @@ response = requests.post(
 response.raise_for_status()
 print(response.json())`,
   Node: `const response = await fetch(
-  "${API_BASE}/v1/dlt/youtube/info",
+  "${PUBLIC_API_URL}/v1/dlt/youtube/info",
   {
     method: "POST",
     headers: {

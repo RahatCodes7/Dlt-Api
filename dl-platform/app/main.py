@@ -1,12 +1,14 @@
 import asyncio
 import json
 import os
+import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, HTTPException, status, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +17,7 @@ from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import (
@@ -32,11 +34,12 @@ from app.auth import (
     get_api_key_user,
     generate_verification_token,
     generate_reset_token,
+    cookie_policy,
 )
 from app.config import settings
 from app.database import AsyncSessionLocal, Base, engine, get_session
 from app.email import email_service
-from app.models import ApiKey, Plan, Proxy, User
+from app.models import ApiKey, Plan, Proxy, Subscription, Transaction, UsageLog, User
 from app.platforms import build_platform_engines, get_engine, PLATFORM_ENGINES
 from app.quota import get_quota, increment_usage, rate_limit_check
 from app.schemas import (
@@ -49,6 +52,7 @@ from app.schemas import (
     InfoRequest,
     LoginRequest,
     PlanOut,
+    ProfileUpdate,
     ProxyCreate,
     QuotaOut,
     RegisterRequest,
@@ -87,17 +91,31 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-_cors_origins = {settings.FRONTEND_URL}
+def _normalize_origin(origin: str) -> str:
+    # Browsers send origins without a trailing slash. Render/env values often
+    # include one, which makes every CORS check fail and blocks login requests.
+    return origin.strip().rstrip("/")
+
+
+_cors_origins = {_normalize_origin(settings.FRONTEND_URL)}
 _cors_origins.update(
-    origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()
+    _normalize_origin(origin)
+    for origin in settings.CORS_ORIGINS.split(",")
+    if origin.strip()
 )
+_cors_origins.discard("")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(_cors_origins),
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _frontend_url() -> str:
+    return settings.FRONTEND_URL.rstrip("/") or "http://localhost:3000"
 
 
 def _request_id() -> str:
@@ -114,6 +132,146 @@ def _is_expired(value: Optional[datetime]) -> bool:
 
 def _platform_response(success: bool, platform: str, request_id: str, data=None, error=None):
     return APIResponse(success=success, platform=platform, data=data, request_id=request_id, error=error)
+
+
+def _user_payload(user: User) -> dict:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "role": user.role,
+        "plan": user.plan.name if user.plan else None,
+        "email_verified": user.email_verified,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+    }
+
+
+def _month_reset_at(now: Optional[datetime] = None) -> datetime:
+    now = now or datetime.now(timezone.utc)
+    if now.month == 12:
+        return now.replace(year=now.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    return now.replace(month=now.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+async def _account_quota(user: User, session: AsyncSession) -> dict:
+    quota = await get_quota(user.id, session)
+    quota["reset_at"] = _month_reset_at()
+    return quota
+
+
+async def _record_usage(
+    session: AsyncSession,
+    user: User,
+    platform: str,
+    url: str,
+    success: bool,
+    file_size: Optional[int] = None,
+) -> None:
+    session.add(
+        UsageLog(
+            user_id=user.id,
+            product=platform,
+            url=url,
+            status="success" if success else "error",
+            file_size=file_size,
+        )
+    )
+    await session.commit()
+
+
+async def _recent_usage_rows(user_id: int, session: AsyncSession, since: datetime):
+    result = await session.execute(
+        select(UsageLog.created_at, UsageLog.status, UsageLog.product).where(
+            UsageLog.user_id == user_id,
+            UsageLog.created_at >= since,
+        )
+    )
+    return result.all()
+
+
+def _log_payload(log: UsageLog) -> dict:
+    return {
+        "id": log.id,
+        "platform": log.product,
+        "url": log.url,
+        "status": log.status,
+        "created_at": log.created_at.isoformat() if log.created_at else None,
+    }
+
+
+def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+async def _usage_summary(user_id: int, session: AsyncSession, days: int = 7) -> dict:
+    now = datetime.now(timezone.utc)
+    start_date = now.date() - timedelta(days=days - 1)
+    since = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+    rows = await _recent_usage_rows(user_id, session, since)
+
+    buckets = {
+        start_date + timedelta(days=index): {"requests": 0, "errors": 0}
+        for index in range(days)
+    }
+    platform_counts: dict[str, int] = {}
+    total = 0
+    errors = 0
+
+    for created_at, status_value, product in rows:
+        created = _as_utc(created_at)
+        if created is None:
+            continue
+        bucket = buckets.get(created.date())
+        if bucket is None:
+            continue
+        bucket["requests"] += 1
+        if status_value != "success":
+            bucket["errors"] += 1
+            errors += 1
+        total += 1
+        platform_counts[product] = platform_counts.get(product, 0) + 1
+
+    day_payload = [
+        {
+            "date": day.isoformat(),
+            "day": day.strftime("%a"),
+            "requests": values["requests"],
+            "errors": values["errors"],
+        }
+        for day, values in buckets.items()
+    ]
+    platform_payload = [
+        {
+            "platform": platform,
+            "requests": count,
+            "percentage": round((count / total) * 100) if total else 0,
+        }
+        for platform, count in sorted(platform_counts.items(), key=lambda item: item[1], reverse=True)
+    ]
+
+    error_result = await session.execute(
+        select(UsageLog)
+        .where(UsageLog.user_id == user_id, UsageLog.status != "success")
+        .order_by(UsageLog.id.desc())
+        .limit(10)
+    )
+    recent_errors = [_log_payload(log) for log in error_result.scalars().all()]
+
+    return {
+        "totals": {
+            "total": total,
+            "errors": errors,
+            "success_rate": round(((total - errors) / total) * 100, 1) if total else 100.0,
+            "last_7_days": total,
+        },
+        "days": day_payload,
+        "platforms": platform_payload,
+        "recent_errors": recent_errors,
+    }
 
 
 async def _enforce_quota(session: AsyncSession, user: User):
@@ -255,13 +413,7 @@ async def refresh_token(
 
 @app.get("/v1/auth/me")
 async def me(user: User = Depends(require_auth_user)):
-    return {
-        "id": user.id,
-        "email": user.email,
-        "name": user.name,
-        "role": user.role,
-        "plan": user.plan.name if user.plan else None,
-    }
+    return _user_payload(user)
 
 
 @app.get("/v1/auth/verify-email")
@@ -350,31 +502,158 @@ async def reset_password(
     return {"message": "Password reset successful"}
 
 
-# Google OAuth (placeholder - full implementation needs google-auth library)
+# Google OAuth
+
+def _google_redirect_uri() -> str:
+    """Keep the OAuth callback on the frontend origin.
+
+    The browser talks to the frontend origin, which proxies /v1/* to this API.
+    Returning to the API host would put the session cookie on the wrong host.
+    """
+    frontend = _frontend_url()
+    configured = settings.GOOGLE_REDIRECT_URI.strip()
+    if configured.startswith(f"{frontend}/"):
+        return configured
+    return f"{frontend}/v1/auth/google/callback"
+
+
+def _google_failure(reason: str) -> RedirectResponse:
+    response = RedirectResponse(url=f"{_frontend_url()}/login?error={reason}")
+    response.delete_cookie("oauth_state", path="/")
+    return response
+
+
 @app.get("/v1/auth/google/login")
 async def google_login():
-    if not settings.GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Google OAuth not configured")
-    google_auth_url = (
-        "https://accounts.google.com/o/oauth2/v2/auth"
-        f"?client_id={settings.GOOGLE_CLIENT_ID}"
-        f"&redirect_uri={settings.GOOGLE_REDIRECT_URI}"
-        f"&response_type=code"
-        f"&scope=openid email profile"
-        f"&access_type=offline"
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        return _google_failure("google_not_configured")
+
+    state = secrets.token_urlsafe(24)
+    params = urlencode(
+        {
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "redirect_uri": _google_redirect_uri(),
+            "response_type": "code",
+            "scope": "openid email profile",
+            "access_type": "offline",
+            "prompt": "select_account",
+            "state": state,
+        }
     )
-    return RedirectResponse(url=google_auth_url)
+    response = RedirectResponse(url=f"{settings.GOOGLE_AUTH_URL}?{params}")
+    secure, samesite = cookie_policy()
+    response.set_cookie(
+        key="oauth_state",
+        value=state,
+        httponly=True,
+        secure=secure,
+        samesite=samesite,
+        max_age=600,
+        path="/",
+    )
+    return response
 
 
 @app.get("/v1/auth/google/callback")
 async def google_callback(
-    code: str,
     request: Request,
-    response: Response,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
 ):
-    # Placeholder - full implementation exchanges code for user info
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Google OAuth callback not yet implemented")
+    if error or not code:
+        return _google_failure("google_cancelled")
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        return _google_failure("google_not_configured")
+
+    expected_state = request.cookies.get("oauth_state")
+    if not expected_state or not state or not secrets.compare_digest(expected_state, state):
+        return _google_failure("google_state_mismatch")
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            token_response = await client.post(
+                settings.GOOGLE_TOKEN_URL,
+                data={
+                    "code": code,
+                    "client_id": settings.GOOGLE_CLIENT_ID,
+                    "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": _google_redirect_uri(),
+                    "grant_type": "authorization_code",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            token_response.raise_for_status()
+            tokens = token_response.json()
+            access_token = tokens.get("access_token")
+            if not access_token:
+                raise ValueError("Google token response did not include an access token")
+
+            userinfo_response = await client.get(
+                settings.GOOGLE_USERINFO_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            userinfo_response.raise_for_status()
+            info = userinfo_response.json()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[google-oauth] token exchange failed: {exc}")
+        return _google_failure("google_exchange_failed")
+
+    google_id = str(info.get("sub") or "")
+    email = str(info.get("email") or "").lower().strip()
+    if not google_id or not email:
+        return _google_failure("google_no_email")
+    if str(info.get("email_verified", "true")).lower() == "false":
+        return _google_failure("google_email_unverified")
+
+    result = await session.execute(select(User).where(User.google_id == google_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        result = await session.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
+
+    if user is None:
+        result = await session.execute(select(Plan).where(Plan.name == "Free").limit(1))
+        plan = result.scalar_one_or_none()
+        if plan is None:
+            plan = Plan(name="Free", monthly_requests=100, price=0.0, active=True)
+            session.add(plan)
+            await session.flush()
+
+        admin_emails = {
+            item.strip().lower() for item in settings.ADMIN_EMAILS.split(",") if item.strip()
+        }
+        user = User(
+            email=email,
+            name=info.get("name") or email.split("@")[0],
+            google_id=google_id,
+            plan_id=plan.id,
+            status="active",
+            role="admin" if email in admin_emails else "user",
+            email_verified=True,
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+    else:
+        if user.status != "active":
+            return _google_failure("account_inactive")
+        if not user.google_id:
+            user.google_id = google_id
+        if not user.email_verified:
+            user.email_verified = True
+        await session.commit()
+
+    destination = "/admin/dashboard" if user.role == "admin" else "/dashboard"
+    response = RedirectResponse(url=f"{_frontend_url()}{destination}")
+    set_auth_cookies(
+        response,
+        create_access_token(user.id, user.email),
+        create_refresh_token(user.id),
+    )
+    response.delete_cookie("oauth_state", path="/")
+    return response
 
 
 # ============================================================================
@@ -432,6 +711,153 @@ async def session_delete_key(
     return None
 
 
+@app.get("/v1/session/account/overview")
+async def session_overview(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    quota = await _account_quota(user, session)
+    usage = await _usage_summary(user.id, session)
+
+    key_result = await session.execute(select(ApiKey.status).where(ApiKey.user_id == user.id))
+    statuses = key_result.scalars().all()
+
+    recent_result = await session.execute(
+        select(UsageLog)
+        .where(UsageLog.user_id == user.id)
+        .order_by(UsageLog.id.desc())
+        .limit(5)
+    )
+    recent = [_log_payload(log) for log in recent_result.scalars().all()]
+
+    return {
+        "user": _user_payload(user),
+        "quota": quota,
+        "keys": {
+            "total": len(statuses),
+            "active": sum(1 for status in statuses if status == "active"),
+        },
+        "usage": usage["totals"],
+        "days": usage["days"],
+        "platforms": usage["platforms"],
+        "recent_errors": usage["recent_errors"],
+        "recent": recent,
+    }
+
+
+@app.get("/v1/session/account/usage")
+async def session_usage(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    usage = await _usage_summary(user.id, session)
+    usage["quota"] = await _account_quota(user, session)
+    return usage
+
+
+@app.get("/v1/session/account/logs")
+async def session_logs(
+    status_filter: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+
+    query = select(UsageLog).where(UsageLog.user_id == user.id)
+    count_query = select(func.count(UsageLog.id)).where(UsageLog.user_id == user.id)
+    if status_filter == "error":
+        query = query.where(UsageLog.status != "success")
+        count_query = count_query.where(UsageLog.status != "success")
+    elif status_filter == "success":
+        query = query.where(UsageLog.status == "success")
+        count_query = count_query.where(UsageLog.status == "success")
+
+    total = (await session.execute(count_query)).scalar_one()
+    result = await session.execute(
+        query.order_by(UsageLog.id.desc()).limit(limit).offset(offset)
+    )
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "items": [_log_payload(log) for log in result.scalars().all()],
+    }
+
+
+@app.get("/v1/session/account/subscription")
+async def session_subscription(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    quota = await _account_quota(user, session)
+    sub_result = await session.execute(
+        select(Subscription)
+        .where(Subscription.user_id == user.id)
+        .order_by(Subscription.id.desc())
+        .limit(1)
+    )
+    sub = sub_result.scalar_one_or_none()
+
+    tx_result = await session.execute(
+        select(Transaction)
+        .where(Transaction.user_id == user.id)
+        .order_by(Transaction.id.desc())
+        .limit(20)
+    )
+    transactions = [
+        {
+            "id": tx.id,
+            "amount": float(tx.amount),
+            "currency": tx.currency,
+            "method": tx.method,
+            "status": tx.status,
+            "ref": tx.ref,
+            "created_at": tx.created_at.isoformat() if tx.created_at else None,
+        }
+        for tx in tx_result.scalars().all()
+    ]
+
+    return {
+        "user": _user_payload(user),
+        "plan": {
+            "id": user.plan.id,
+            "name": user.plan.name,
+            "monthly_requests": user.plan.monthly_requests,
+            "price": float(user.plan.price) if user.plan.price is not None else None,
+        }
+        if user.plan
+        else None,
+        "quota": quota,
+        "subscription": {
+            "status": sub.status,
+            "start": sub.start.isoformat() if sub.start else None,
+            "end": sub.end.isoformat() if sub.end else None,
+            "auto_renew": sub.auto_renew,
+        }
+        if sub
+        else None,
+        "transactions": transactions,
+    }
+
+
+@app.patch("/v1/session/account/profile")
+async def session_update_profile(
+    body: ProfileUpdate,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Name is required")
+    user.name = name
+    await session.commit()
+    await session.refresh(user)
+    return _user_payload(user)
+
+
 # ============================================================================
 # API ROUTES (/v1/dlt/ prefix)
 # ============================================================================
@@ -460,12 +886,14 @@ async def platform_info(
     info, error = await engine_.extract_info(str(body.url))
     if error:
         await increment_usage(user.id, session)
+        await _record_usage(session, user, platform, str(body.url), False)
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content=_platform_response(False, platform, rid, error=error).model_dump(),
         )
 
     await increment_usage(user.id, session)
+    await _record_usage(session, user, platform, str(body.url), True)
     return _platform_response(True, platform, rid, data=info)
 
 
@@ -493,12 +921,20 @@ async def platform_download(
     file_path, info, error = await engine_.download(str(body.url), format_id=body.format)
     if error:
         await increment_usage(user.id, session)
+        await _record_usage(session, user, platform, str(body.url), False)
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content=_platform_response(False, platform, rid, error=error).model_dump(),
         )
 
     await increment_usage(user.id, session)
+    file_size = None
+    if file_path and os.path.exists(file_path):
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError:
+            file_size = None
+    await _record_usage(session, user, platform, str(body.url), True, file_size=file_size)
 
     file_token = uuid.uuid4().hex
     download_url = f"/v1/dlt/files/{file_token}"
@@ -640,6 +1076,127 @@ async def health():
 async def list_plans(session: AsyncSession = Depends(get_session)):
     result = await session.execute(select(Plan).where(Plan.active == True))  # noqa: E712
     return result.scalars().all()
+
+
+# ============================================================================
+# ADMIN OVERVIEW
+# ============================================================================
+
+@app.get("/v1/admin/overview")
+async def admin_overview(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    last_24h = now - timedelta(hours=24)
+
+    total_users = (await session.execute(select(func.count(User.id)))).scalar_one()
+    new_users = (
+        await session.execute(
+            select(func.count(User.id)).where(User.created_at >= month_start)
+        )
+    ).scalar_one()
+    active_subs = (
+        await session.execute(
+            select(func.count(Subscription.id)).where(Subscription.status == "active")
+        )
+    ).scalar_one()
+    active_keys = (
+        await session.execute(
+            select(func.count(ApiKey.id)).where(ApiKey.status == "active")
+        )
+    ).scalar_one()
+    monthly_revenue = (
+        await session.execute(
+            select(func.coalesce(func.sum(Transaction.amount), 0)).where(
+                Transaction.status == "completed",
+                Transaction.created_at >= month_start,
+            )
+        )
+    ).scalar_one()
+
+    total_logged = (await session.execute(select(func.count(UsageLog.id)))).scalar_one()
+    today_requests = (
+        await session.execute(
+            select(func.count(UsageLog.id)).where(UsageLog.created_at >= day_start)
+        )
+    ).scalar_one()
+    failed_24h = (
+        await session.execute(
+            select(func.count(UsageLog.id)).where(
+                UsageLog.status != "success",
+                UsageLog.created_at >= last_24h,
+            )
+        )
+    ).scalar_one()
+    requests_24h = (
+        await session.execute(
+            select(func.count(UsageLog.id)).where(UsageLog.created_at >= last_24h)
+        )
+    ).scalar_one()
+
+    signup_result = await session.execute(
+        select(User).order_by(User.id.desc()).limit(5)
+    )
+    signups = [
+        {
+            "id": item.id,
+            "name": item.name,
+            "email": item.email,
+            "plan": item.plan.name if item.plan else None,
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+        }
+        for item in signup_result.scalars().all()
+    ]
+
+    week_rows = await session.execute(
+        select(UsageLog.created_at, UsageLog.status).where(
+            UsageLog.created_at >= datetime.combine(
+                now.date() - timedelta(days=6), datetime.min.time(), tzinfo=timezone.utc
+            )
+        )
+    )
+    buckets = {
+        now.date() - timedelta(days=index): {"requests": 0, "errors": 0}
+        for index in range(6, -1, -1)
+    }
+    for created_at, log_status in week_rows.all():
+        created = _as_utc(created_at)
+        if created is None or created.date() not in buckets:
+            continue
+        buckets[created.date()]["requests"] += 1
+        if log_status != "success":
+            buckets[created.date()]["errors"] += 1
+
+    return {
+        "users": {"total": total_users, "new_this_month": new_users},
+        "subscriptions": {"active": active_subs},
+        "revenue": {"month": float(monthly_revenue or 0)},
+        "requests": {
+            "today": today_requests,
+            "last_24h": requests_24h,
+            "failed_24h": failed_24h,
+            "total_logged": total_logged,
+            "error_rate": round((failed_24h / requests_24h) * 100, 1) if requests_24h else 0.0,
+        },
+        "keys": {"active": active_keys},
+        "signups": signups,
+        "days": [
+            {
+                "date": day.isoformat(),
+                "day": day.strftime("%a"),
+                "requests": values["requests"],
+                "errors": values["errors"],
+            }
+            for day, values in buckets.items()
+        ],
+        "platforms": list(PLATFORM_ENGINES.keys()),
+    }
 
 
 # ============================================================================
