@@ -59,6 +59,9 @@ from app.tasks import run_cleanup
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import re
+    masked = re.sub(r"(://[^:]*:)[^@]*(@)", r"\1***\2", settings.DATABASE_URL)
+    print(f"[startup] DATABASE_URL={masked}")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     # Seed default Free plan
