@@ -1,4 +1,5 @@
-from pydantic import Field
+from pydantic import Field, model_validator
+from pydantic import AliasChoices
 from pydantic_settings import BaseSettings
 
 
@@ -13,7 +14,22 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     # Database (PostgreSQL in prod, SQLite for local dev)
-    DATABASE_URL: str = "sqlite+aiosqlite:///./dl_platform.db"
+    DATABASE_URL: str = Field(
+        default="sqlite+aiosqlite:///./dl_platform.db",
+        validation_alias=AliasChoices("DLT_DATABASE_URL", "DATABASE_URL"),
+    )
+
+    @model_validator(mode="after")
+    def _normalize_db_url(self):
+        url = (self.DATABASE_URL or "").strip()
+        if not url:
+            url = "sqlite+aiosqlite:///./dl_platform.db"
+        if url.startswith("postgres://"):
+            url = "postgresql+psycopg://" + url[len("postgres://"):]
+        elif url.startswith("postgresql://") and "+psycopg" not in url:
+            url = "postgresql+psycopg://" + url[len("postgresql://"):]
+        self.DATABASE_URL = url
+        return self
 
     # Redis (rate limiting / cache)
     REDIS_URL: str = "redis://localhost:6379/0"
