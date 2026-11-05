@@ -1,4 +1,5 @@
-import json
+import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -12,6 +13,11 @@ from app.models import User, UsageCounter
 
 
 redis_client: Optional[redis.Redis] = None
+redis_disabled_until: float = 0.0
+
+# In-memory fallback so the API keeps working when Redis is unavailable.
+_memory_buckets: dict[str, tuple[int, float]] = {}
+_memory_lock = asyncio.Lock()
 
 
 async def get_redis() -> redis.Redis:
@@ -25,17 +31,43 @@ def month_key() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
-async def rate_limit_check(key: str, limit: int, window_seconds: int = 60) -> bool:
-    """Return True if allowed, False if rate limited."""
-    r = await get_redis()
-    current = await r.get(key)
-    if current is None:
-        await r.set(key, "1", ex=window_seconds)
+async def _memory_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
+    now = time.monotonic()
+    async with _memory_lock:
+        count, reset_at = _memory_buckets.get(key, (0, now + window_seconds))
+        if now >= reset_at:
+            count, reset_at = 0, now + window_seconds
+        if count >= limit:
+            _memory_buckets[key] = (count, reset_at)
+            return False
+        _memory_buckets[key] = (count + 1, reset_at)
         return True
-    if int(current) >= limit:
-        return False
-    await r.incr(key)
-    return True
+
+
+async def rate_limit_check(key: str, limit: int, window_seconds: int = 60) -> bool:
+    """Return True if allowed, False if rate limited.
+
+    Uses Redis when available and falls back to a process-local limiter so the
+    API remains usable when Redis is down or not configured (local dev).
+    """
+    global redis_disabled_until
+
+    if time.monotonic() >= redis_disabled_until:
+        try:
+            r = await get_redis()
+            current = await r.get(key)
+            if current is None:
+                await r.set(key, "1", ex=window_seconds)
+                return True
+            if int(current) >= limit:
+                return False
+            await r.incr(key)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            print(f"[rate-limit] Redis unavailable, using memory fallback: {exc}")
+            redis_disabled_until = time.monotonic() + 30
+
+    return await _memory_rate_limit(key, limit, window_seconds)
 
 
 async def get_quota(user_id: int, session: AsyncSession) -> dict:

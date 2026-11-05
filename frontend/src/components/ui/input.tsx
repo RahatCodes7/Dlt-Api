@@ -10,7 +10,8 @@ interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
 }
 
 export function Input({ className, type = "text", label, error, helperText, id, ...props }: InputProps) {
-  const inputId = id || React.useId();
+  const generatedId = React.useId();
+  const inputId = id ?? generatedId;
   return (
     <div className="w-full">
       {label && (
@@ -51,7 +52,7 @@ export function Badge({ className, variant = "default", children, ...props }: Ba
           outline: "border-input bg-transparent",
           success: "border-transparent bg-emerald-100 text-emerald-700",
           warning: "border-transparent bg-amber-100 text-amber-700",
-        },
+        }[variant],
         className
       )}
       {...props}

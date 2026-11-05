@@ -22,7 +22,7 @@ const buttonVariants = (props: { variant?: ButtonProps["variant"]; size?: Button
       ghost: "hover:bg-accent hover:text-accent-foreground",
       link: "text-primary underline-offset-4 hover:underline",
       accent: "bg-accent text-accent-foreground hover:bg-accent/90 shadow-lg shadow-accent/25 hover:shadow-accent/40",
-    },
+    }[variant],
     {
       sm: "h-9 px-3",
       md: "h-10 px-4 py-2",

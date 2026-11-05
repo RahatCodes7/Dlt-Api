@@ -1,62 +1,343 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
-  --color-background: 0 0% 100%;
-  --color-foreground: 222.2 84% 4.9%;
-  --color-card: 0 0% 100%;
-  --color-card-foreground: 222.2 84% 4.9%;
-  --color-primary: 221.2 83.2% 53.3%;
-  --color-primary-foreground: 210 40% 98%;
-  --color-secondary: 210 40% 96.1%;
-  --color-secondary-foreground: 222.2 84% 4.9%;
-  --color-muted: 210 40% 96.1%;
-  --color-muted-foreground: 215.4 16.3% 46.9%;
-  --color-accent: 142.1 70.6% 45.3%;
-  --color-accent-foreground: 210 40% 98%;
-  --color-destructive: 0 84.2% 60.2%;
-  --color-destructive-foreground: 210 40% 98%;
-  --color-border: 214.3 31.8% 91.4%;
-  --color-input: 214.3 31.8% 91.4%;
-  --color-ring: 221.2 83.2% 53.3%;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, "SF Mono",
+    Menlo, Consolas, monospace;
+
+  --color-background: hsl(210 40% 99%);
+  --color-foreground: hsl(222 47% 11%);
+  --color-card: hsl(0 0% 100%);
+  --color-card-foreground: hsl(222 47% 11%);
+  --color-popover: hsl(0 0% 100%);
+  --color-popover-foreground: hsl(222 47% 11%);
+  --color-primary: hsl(243 75% 59%);
+  --color-primary-foreground: hsl(0 0% 100%);
+  --color-secondary: hsl(220 14% 96%);
+  --color-secondary-foreground: hsl(222 47% 11%);
+  --color-muted: hsl(220 16% 96%);
+  --color-muted-foreground: hsl(220 9% 46%);
+  --color-accent: hsl(160 84% 36%);
+  --color-accent-foreground: hsl(0 0% 100%);
+  --color-destructive: hsl(0 72% 51%);
+  --color-destructive-foreground: hsl(0 0% 100%);
+  --color-success: hsl(160 84% 36%);
+  --color-warning: hsl(38 92% 50%);
+  --color-border: hsl(220 16% 90%);
+  --color-input: hsl(220 16% 88%);
+  --color-ring: hsl(243 75% 59%);
+
   --radius: 0.75rem;
 
-  --color-dark-bg: 222.2 84% 4.9%;
-  --color-dark-foreground: 210 40% 98%;
-  --color-dark-card: 222.2 84% 4.9%;
-  --color-dark-card-foreground: 210 40% 98%;
-  --color-dark-primary: 217.2 91.2% 59.8%;
-  --color-dark-accent: 142.1 70.6% 45.3%;
+  --animate-fade-up: fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-fade-in: fade-in 0.5s ease-out both;
+  --animate-float: float 7s ease-in-out infinite;
+  --animate-pulse-slow: pulse-slow 5s ease-in-out infinite;
+  --animate-shimmer: shimmer 2.4s linear infinite;
 }
 
-@theme inline {
-  --radius: 0.75rem;
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-body {
-  background-color: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  font-feature-settings: "rlig" 1, "calt" 0, "liga" 0;
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-14px);
+  }
+}
+
+@keyframes pulse-slow {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
 }
 
 .dark {
-  --background: 222.2 84% 4.9%;
-  --foreground: 210 40% 98%;
-  --card: 222.2 84% 4.9%;
-  --card-foreground: 210 40% 98%;
-  --primary: 217.2 91.2% 59.8%;
-  --primary-foreground: 222.2 47.4% 11.2%;
-  --accent: 142.1 70.6% 45.3%;
-  --border: 217.2 32.6% 17.5%;
+  --color-background: hsl(224 47% 6%);
+  --color-foreground: hsl(210 40% 98%);
+  --color-card: hsl(223 41% 9%);
+  --color-card-foreground: hsl(210 40% 98%);
+  --color-popover: hsl(223 41% 9%);
+  --color-popover-foreground: hsl(210 40% 98%);
+  --color-primary: hsl(239 84% 67%);
+  --color-primary-foreground: hsl(224 47% 6%);
+  --color-secondary: hsl(222 33% 15%);
+  --color-secondary-foreground: hsl(210 40% 98%);
+  --color-muted: hsl(222 33% 14%);
+  --color-muted-foreground: hsl(218 14% 65%);
+  --color-accent: hsl(160 84% 45%);
+  --color-accent-foreground: hsl(224 47% 6%);
+  --color-destructive: hsl(0 72% 58%);
+  --color-destructive-foreground: hsl(0 0% 100%);
+  --color-border: hsl(222 30% 18%);
+  --color-input: hsl(222 30% 20%);
+  --color-ring: hsl(239 84% 67%);
 }
 
-.glass-panel {
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.3);
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-primary) 25%, transparent);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--color-muted-foreground) 30%, transparent);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--color-muted-foreground) 50%, transparent);
+    background-clip: content-box;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
-.dark .glass-panel {
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+@layer components {
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0.75rem;
+    padding: 0.625rem 1.25rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1.25rem;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+  }
+
+  .btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-background), 0 0 0 4px var(--color-ring);
+  }
+
+  .btn-primary {
+    background-color: var(--color-primary);
+    color: var(--color-primary-foreground);
+    box-shadow: 0 10px 25px -12px color-mix(in oklab, var(--color-primary) 65%, transparent);
+  }
+
+  .btn-primary:hover {
+    background-color: color-mix(in oklab, var(--color-primary) 88%, black);
+  }
+
+  .btn-accent {
+    background-color: var(--color-accent);
+    color: var(--color-accent-foreground);
+    box-shadow: 0 10px 25px -12px color-mix(in oklab, var(--color-accent) 65%, transparent);
+  }
+
+  .btn-accent:hover {
+    background-color: color-mix(in oklab, var(--color-accent) 88%, black);
+  }
+
+  .btn-outline {
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    color: var(--color-foreground);
+  }
+
+  .btn-outline:hover {
+    border-color: color-mix(in oklab, var(--color-primary) 45%, var(--color-border));
+    background-color: color-mix(in oklab, var(--color-primary) 6%, transparent);
+  }
+
+  .btn-ghost {
+    color: var(--color-muted-foreground);
+  }
+
+  .btn-ghost:hover {
+    background-color: var(--color-muted);
+    color: var(--color-foreground);
+  }
+
+  .btn-sm {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.8rem;
+    border-radius: 0.6rem;
+  }
+
+  .surface {
+    background-color: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: 1rem;
+  }
+
+  .glass {
+    background: color-mix(in oklab, var(--color-card) 72%, transparent);
+    backdrop-filter: blur(16px) saturate(160%);
+    border: 1px solid color-mix(in oklab, var(--color-border) 80%, transparent);
+  }
+
+  .text-gradient {
+    background-image: linear-gradient(
+      100deg,
+      var(--color-primary),
+      color-mix(in oklab, var(--color-accent) 80%, var(--color-primary))
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .grid-bg {
+    background-image: linear-gradient(
+        to right,
+        color-mix(in oklab, var(--color-border) 55%, transparent) 1px,
+        transparent 1px
+      ),
+      linear-gradient(
+        to bottom,
+        color-mix(in oklab, var(--color-border) 55%, transparent) 1px,
+        transparent 1px
+      );
+    background-size: 56px 56px;
+  }
+
+  .dot-bg {
+    background-image: radial-gradient(
+      color-mix(in oklab, var(--color-border) 85%, transparent) 1px,
+      transparent 1px
+    );
+    background-size: 22px 22px;
+  }
+
+  .code-block {
+    background-color: color-mix(in oklab, var(--color-foreground) 96%, var(--color-background));
+    color: hsl(210 40% 92%);
+    font-family: var(--font-mono);
+    border-radius: 0.9rem;
+    overflow-x: auto;
+  }
+
+  .dark .code-block {
+    background-color: hsl(224 47% 4%);
+    border: 1px solid var(--color-border);
+  }
+
+  .prose-doc h2 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin-top: 2.25rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .prose-doc h3 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .prose-doc p {
+    color: var(--color-muted-foreground);
+    line-height: 1.75;
+    margin-bottom: 1rem;
+  }
+
+  .prose-doc ul {
+    list-style: disc;
+    padding-left: 1.4rem;
+    color: var(--color-muted-foreground);
+    line-height: 1.9;
+    margin-bottom: 1rem;
+  }
+
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
+  img,
+  video,
+  canvas,
+  svg {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
 }

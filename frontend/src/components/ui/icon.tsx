@@ -17,9 +17,10 @@ import {
   User,
   AlertCircle,
   Smartphone,
+  type LucideIcon,
 } from "lucide-react";
 
-const IconMap: Record<string, React.ComponentType<React.SVGProps<SVGSVGElement>>> = {
+const IconMap: Record<string, LucideIcon> = {
   Play,
   Zap,
   Code2,
@@ -46,5 +47,5 @@ interface IconProps {
 export function Icon({ name, className, size }: IconProps) {
   const IconComponent = IconMap[name];
   if (!IconComponent) return null;
-  return <IconComponent className={className} size={size} />;
+  return <IconComponent className={className} size={size} aria-hidden="true" />;
 }

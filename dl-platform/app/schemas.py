@@ -26,6 +26,28 @@ class DownloadRequest(BaseModel):
     format: Optional[str] = None
 
 
+# ---- Auth ----
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+    remember: bool = True
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
 # ---- Auth / API keys ----
 class ApiKeyCreate(BaseModel):
     name: Optional[str] = None
@@ -47,6 +69,16 @@ class ApiKeyOut(BaseModel):
 
 class ApiKeyCreatedOut(ApiKeyOut):
     key: str
+
+
+# ---- Proxies ----
+class ProxyCreate(BaseModel):
+    type: str = "http"
+    host: str
+    port: int
+    user: Optional[str] = None
+    password: Optional[str] = None
+    platform: Optional[str] = None
 
 
 # ---- Account / quota ----

@@ -1,4 +1,7 @@
 import asyncio
+import json
+import os
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -6,9 +9,12 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, status, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,12 +41,18 @@ from app.platforms import build_platform_engines, get_engine, PLATFORM_ENGINES
 from app.quota import get_quota, increment_usage, rate_limit_check
 from app.schemas import (
     APIResponse,
+    ApiKeyCreate,
     ApiKeyCreatedOut,
     ApiKeyOut,
     DownloadRequest,
+    ForgotPasswordRequest,
     InfoRequest,
+    LoginRequest,
     PlanOut,
+    ProxyCreate,
     QuotaOut,
+    RegisterRequest,
+    ResetPasswordRequest,
 )
 from app.tasks import run_cleanup
 
@@ -97,9 +109,29 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_cors_origins = {settings.FRONTEND_URL}
+_cors_origins.update(
+    origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=sorted(_cors_origins),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 def _request_id() -> str:
     return f"dl_{uuid.uuid4().hex[:12]}"
+
+
+def _is_expired(value: Optional[datetime]) -> bool:
+    if value is None:
+        return False
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value < datetime.now(timezone.utc)
 
 
 def _platform_response(success: bool, platform: str, request_id: str, data=None, error=None):
@@ -122,12 +154,12 @@ async def _enforce_quota(session: AsyncSession, user: User):
 @app.post("/v1/auth/register")
 async def register(
     request: Request,
-    response: Response,
-    email: str,
-    password: str,
-    name: Optional[str] = None,
+    body: RegisterRequest,
     session: AsyncSession = Depends(get_session),
 ):
+    email = body.email.lower().strip()
+    password = body.password
+    name = body.name
     # Rate limit registration per IP
     client_ip = request.client.host if request.client else "unknown"
     rl_key = f"ratelimit:register:{client_ip}"
@@ -146,31 +178,26 @@ async def register(
         session.add(plan)
         await session.flush()
 
+    admin_emails = {
+        item.strip().lower() for item in settings.ADMIN_EMAILS.split(",") if item.strip()
+    }
     user = User(
         email=email,
         password_hash=hash_password(password),
         name=name,
         plan_id=plan.id,
         status="active",
-        email_verified=False,
+        role="admin" if email in admin_emails else "user",
+        email_verified=True,
     )
     session.add(user)
-    await session.flush()
-
-    # Create email verification token
-    verify_token_str = generate_verification_token()
-    user.email_verification_token = verify_token_str
-    user.email_verification_expires = datetime.now(timezone.utc) + timedelta(hours=24)
     await session.commit()
-
-    # Send verification email
-    await email_service.send_verification_email(email, verify_token_str, name)
 
     return {
         "id": user.id,
         "email": user.email,
-        "message": "Registration successful. Please verify your email.",
-        "email_verified": False,
+        "message": "Registration successful.",
+        "email_verified": True,
     }
 
 
@@ -178,10 +205,11 @@ async def register(
 async def login(
     request: Request,
     response: Response,
-    email: str,
-    password: str,
+    body: LoginRequest,
     session: AsyncSession = Depends(get_session),
 ):
+    email = body.email.lower().strip()
+    password = body.password
     # Rate limit login per IP
     client_ip = request.client.host if request.client else "unknown"
     rl_key = f"ratelimit:login:{client_ip}"
@@ -203,7 +231,13 @@ async def login(
     set_auth_cookies(response, access_token, refresh_token)
 
     return {
-        "user": {"id": user.id, "email": user.email, "name": user.name},
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+            "role": user.role,
+            "plan": user.plan.name if user.plan else None,
+        },
         "message": "Login successful",
     }
 
@@ -241,9 +275,21 @@ async def refresh_token(
     return {"message": "Token refreshed"}
 
 
+@app.get("/v1/auth/me")
+async def me(user: User = Depends(require_auth_user)):
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "role": user.role,
+        "plan": user.plan.name if user.plan else None,
+    }
+
+
 @app.get("/v1/auth/verify-email")
 async def verify_email(
     token: str,
+    json: bool = False,
     session: AsyncSession = Depends(get_session),
 ):
     result = await session.execute(
@@ -252,13 +298,16 @@ async def verify_email(
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid verification token")
-    if user.email_verification_expires and user.email_verification_expires < datetime.now(timezone.utc):
+    if _is_expired(user.email_verification_expires):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Verification token expired")
 
     user.email_verified = True
     user.email_verification_token = None
     user.email_verification_expires = None
     await session.commit()
+
+    if json:
+        return {"message": "Email verified", "email": user.email}
 
     # Send welcome email
     await email_service.send_welcome_email(user.email, user.name)
@@ -269,9 +318,10 @@ async def verify_email(
 @app.post("/v1/auth/forgot-password")
 async def forgot_password(
     request: Request,
-    email: str,
+    body: ForgotPasswordRequest,
     session: AsyncSession = Depends(get_session),
 ):
+    email = body.email.lower().strip()
     # Rate limit per IP
     client_ip = request.client.host if request.client else "unknown"
     rl_key = f"ratelimit:forgot:{client_ip}"
@@ -288,32 +338,33 @@ async def forgot_password(
     if not user.password_hash:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Account uses social login")
 
-    reset_token_str = generate_reset_token()
-    user.password_reset_token = reset_token_str
-    user.password_reset_expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    reset_code = generate_reset_token()
+    user.password_reset_token = reset_code
+    user.password_reset_expires = datetime.now(timezone.utc) + timedelta(minutes=10)
     await session.commit()
 
-    await email_service.send_password_reset_email(email, reset_token_str, user.name)
+    await email_service.send_password_reset_email(email, reset_code, user.name)
+    if settings.DEBUG:
+        print(f"[DEV] Reset code for {email}: {reset_code}")
 
-    return {"message": "If the email exists, a reset link has been sent"}
+    return {"message": "If the email exists, a reset code has been sent"}
 
 
 @app.post("/v1/auth/reset-password")
 async def reset_password(
-    token: str,
-    new_password: str,
+    body: ResetPasswordRequest,
     session: AsyncSession = Depends(get_session),
 ):
     result = await session.execute(
-        select(User).where(User.password_reset_token == token)
+        select(User).where(User.password_reset_token == body.token)
     )
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid reset token")
-    if user.password_reset_expires and user.password_reset_expires < datetime.now(timezone.utc):
+    if _is_expired(user.password_reset_expires):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Reset token expired")
 
-    user.password_hash = hash_password(new_password)
+    user.password_hash = hash_password(body.new_password)
     user.password_reset_token = None
     user.password_reset_expires = None
     await session.commit()
@@ -363,8 +414,7 @@ async def session_list_keys(
 
 @app.post("/v1/session/account/keys", response_model=ApiKeyCreatedOut, status_code=status.HTTP_201_CREATED)
 async def session_create_key(
-    name: Optional[str] = None,
-    platforms: Optional[list[str]] = None,
+    body: ApiKeyCreate,
     user: User = Depends(require_auth_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -375,16 +425,16 @@ async def session_create_key(
     api_key = ApiKey(
         user_id=user.id,
         key_hash=key_hash,
-        name=name,
-        platforms=platforms or [],
+        name=body.name,
+        platforms=body.platforms or [],
         status="active",
     )
     session.add(api_key)
     await session.commit()
     await session.refresh(api_key)
-    out = ApiKeyCreatedOut.model_validate(api_key)
-    out.key = raw_key
-    return out
+    payload = ApiKeyOut.model_validate(api_key).model_dump()
+    payload.pop("key", None)
+    return ApiKeyCreatedOut(**payload, key=raw_key)
 
 
 @app.delete("/v1/session/account/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -472,17 +522,21 @@ async def platform_download(
 
     await increment_usage(user.id, session)
 
-    download_url = f"/v1/dlt/files/{uuid.uuid4().hex}"
+    file_token = uuid.uuid4().hex
+    download_url = f"/v1/dlt/files/{file_token}"
     if not hasattr(app.state, "download_map"):
         app.state.download_map = {}
-    app.state.download_map[download_url] = file_path
+    app.state.download_map[file_token] = (
+        file_path,
+        time.time() + settings.FILE_URL_TTL_SECONDS,
+    )
 
     data = {
         "download_url": download_url,
         "title": (info or {}).get("title"),
         "duration": (info or {}).get("duration"),
         "extractor": (info or {}).get("extractor"),
-        "expires_in": settings.DOWNLOAD_TIMEOUT_SECONDS,
+        "expires_in": settings.FILE_URL_TTL_SECONDS,
     }
     return _platform_response(True, platform, rid, data=data)
 
@@ -490,13 +544,25 @@ async def platform_download(
 @app.get("/v1/dlt/files/{file_token}")
 async def download_file(file_token: str):
     download_map = getattr(app.state, "download_map", {})
-    file_path = download_map.get(file_token)
-    if not file_path:
+    entry = download_map.get(file_token)
+    if not entry:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found or expired")
 
-    import os
-    if not os.path.exists(file_path):
+    file_path, expires_at = entry
+    if time.time() > expires_at or not os.path.exists(file_path):
+        download_map.pop(file_token, None)
+        if os.path.exists(file_path):
+            os.remove(file_path)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File no longer available")
+
+    def cleanup():
+        download_map.pop(file_token, None)
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+
+    import urllib.parse
 
     def iter_file():
         with open(file_path, "rb") as f:
@@ -506,10 +572,19 @@ async def download_file(file_token: str):
                     break
                 yield chunk
 
+    raw_name = os.path.basename(file_path)
+    try:
+        safe_name = raw_name.encode("latin-1") and raw_name
+    except UnicodeEncodeError:
+        safe_name = "download"
+    encoded_name = urllib.parse.quote(raw_name)
     return StreamingResponse(
         iter_file(),
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{os.path.basename(file_path)}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}"; filename*=UTF-8\'\'{encoded_name}'
+        },
+        background=BackgroundTask(cleanup),
     )
 
 
@@ -534,8 +609,7 @@ async def list_keys(
 
 @app.post("/v1/dlt/account/keys", response_model=ApiKeyCreatedOut, status_code=status.HTTP_201_CREATED)
 async def create_key_api(
-    name: Optional[str] = None,
-    platforms: Optional[list[str]] = None,
+    body: ApiKeyCreate,
     user: User = Depends(get_api_key_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -546,16 +620,16 @@ async def create_key_api(
     api_key = ApiKey(
         user_id=user.id,
         key_hash=key_hash,
-        name=name,
-        platforms=platforms or [],
+        name=body.name,
+        platforms=body.platforms or [],
         status="active",
     )
     session.add(api_key)
     await session.commit()
     await session.refresh(api_key)
-    out = ApiKeyCreatedOut.model_validate(api_key)
-    out.key = raw_key
-    return out
+    payload = ApiKeyOut.model_validate(api_key).model_dump()
+    payload.pop("key", None)
+    return ApiKeyCreatedOut(**payload, key=raw_key)
 
 
 @app.delete("/v1/dlt/account/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -601,7 +675,7 @@ async def list_proxies(
 ):
     if user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
-    result = await session.execute(select(Proxy).order_by(Proxy.created_at.desc()))
+    result = await session.execute(select(Proxy).order_by(Proxy.id.desc()))
     proxies = result.scalars().all()
     return [
         {
@@ -613,7 +687,6 @@ async def list_proxies(
             "platform": p.platform,
             "status": p.status,
             "last_checked": p.last_checked,
-            "created_at": p.created_at,
         }
         for p in proxies
     ]
@@ -621,12 +694,7 @@ async def list_proxies(
 
 @app.post("/v1/admin/proxies")
 async def add_proxy(
-    type: str,
-    host: str,
-    port: int,
-    user: Optional[str] = None,
-    password: Optional[str] = None,
-    platform: Optional[str] = None,
+    body: ProxyCreate,
     current_user: User = Depends(require_auth_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -634,12 +702,12 @@ async def add_proxy(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
 
     proxy = Proxy(
-        type=type,
-        host=host,
-        port=port,
-        user=user,
-        pass_encrypted=password,
-        platform=platform,
+        type=body.type,
+        host=body.host,
+        port=body.port,
+        user=body.user,
+        pass_encrypted=body.password,
+        platform=body.platform,
         status="active",
     )
     session.add(proxy)
@@ -695,6 +763,54 @@ async def toggle_proxy(
     await build_platform_engines(session)
 
     return {"id": proxy.id, "status": proxy.status}
+
+
+@app.post("/v1/admin/proxies/{proxy_id}/check")
+async def check_proxy(
+    proxy_id: int,
+    current_user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    result = await session.execute(select(Proxy).where(Proxy.id == proxy_id))
+    proxy = result.scalar_one_or_none()
+    if proxy is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proxy not found")
+
+    scheme = proxy.type or "http"
+    auth = ""
+    if proxy.user and proxy.pass_encrypted:
+        auth = f"{proxy.user}:{proxy.pass_encrypted}@"
+    proxy_url = f"{scheme}://{auth}{proxy.host}:{proxy.port}"
+
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(proxy=proxy_url, timeout=15) as client:
+            response = await client.get("https://api.ipify.org")
+        latency_ms = round((time.monotonic() - started) * 1000)
+        ok = response.is_success
+        proxy.status = "active" if ok else "error"
+        proxy.last_checked = datetime.now(timezone.utc)
+        await session.commit()
+        return {
+            "id": proxy.id,
+            "ok": ok,
+            "status_code": response.status_code,
+            "latency_ms": latency_ms,
+            "ip": response.text.strip() if ok else None,
+        }
+    except Exception as exc:  # noqa: BLE001
+        proxy.status = "error"
+        proxy.last_checked = datetime.now(timezone.utc)
+        await session.commit()
+        return {
+            "id": proxy.id,
+            "ok": False,
+            "error": str(exc),
+            "latency_ms": round((time.monotonic() - started) * 1000),
+        }
 
 
 # ============================================================================

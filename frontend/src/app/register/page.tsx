@@ -1,45 +1,84 @@
 "use client";
 
-import { useState } from "react";
+import * as React from "react";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import {
+  AlertCircle,
+  ArrowRight,
+  Check,
+  CheckCircle2,
+  Eye,
+  EyeOff,
+  Loader2,
+  Lock,
+  Mail,
+  User,
+} from "lucide-react";
+import { AuthShell } from "@/components/auth-shell";
 import { Input } from "@/components/ui/input";
-import { User as UserIcon, Mail, Lock } from "lucide-react";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+function strength(password: string) {
+  let score = 0;
+  if (password.length >= 8) score += 1;
+  if (/[A-Z]/.test(password) && /[a-z]/.test(password)) score += 1;
+  if (/\d/.test(password)) score += 1;
+  if (/[^A-Za-z0-9]/.test(password)) score += 1;
+  return score;
+}
 
 export default function RegisterPage() {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [name, setName] = React.useState("");
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [confirmPassword, setConfirmPassword] = React.useState("");
+  const [showPassword, setShowPassword] = React.useState(false);
+  const [accepted, setAccepted] = React.useState(false);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const [success, setSuccess] = React.useState("");
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const score = strength(password);
+  const labels = ["Too short", "Weak", "Fair", "Good", "Strong"];
+  const colors = [
+    "bg-destructive",
+    "bg-destructive",
+    "bg-amber-400",
+    "bg-primary",
+    "bg-accent",
+  ];
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setError("");
     setSuccess("");
-    setLoading(true);
 
     if (password !== confirmPassword) {
-      setError("Passwords do not match");
-      setLoading(false);
+      setError("Passwords do not match.");
+      return;
+    }
+    if (!accepted) {
+      setError("Please accept the terms of service to continue.");
       return;
     }
 
+    setLoading(true);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/v1/auth/register`, {
+      const response = await fetch(`${API_BASE}/v1/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, name }),
+        body: JSON.stringify({ name, email, password }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.detail || "Registration failed");
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError(data.detail || "Registration failed. Please try again.");
         return;
       }
-      setSuccess("Account created! Please check your email to verify your account.");
-    } catch (err) {
+      setSuccess(
+        "Account created. You can sign in now.",
+      );
+    } catch {
       setError("Network error. Please try again.");
     } finally {
       setLoading(false);
@@ -47,139 +86,176 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <nav className="border-b border-border bg-background">
-        <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <span className="text-primary font-bold text-lg">DLT</span>
-            <span className="font-bold text-xl tracking-tight">DELETE<span className="text-primary">API</span></span>
+    <AuthShell
+      title="Create your account"
+      subtitle="Start with 100 free requests — no credit card required."
+      footer={
+        <>
+          Already have an account?{" "}
+          <Link href="/login" className="font-semibold text-primary hover:underline">
+            Sign in
           </Link>
-        </div>
-      </nav>
-
-      <div className="flex-1 flex items-center justify-center px-4 py-12">
-        <div className="w-full max-w-md">
-          <div className="text-center mb-8">
-            <Link href="/" className="flex items-center gap-2 mb-4 inline-block">
-              <span className="text-primary font-bold text-xl">DLT</span>
-              <span className="font-bold text-xl">DELETE API</span>
-            </Link>
-            <h2 className="text-2xl font-bold">Create Your Account</h2>
-            <p className="text-muted-foreground">Join the DELETE Developer Platform</p>
+        </>
+      }
+    >
+      <div className="rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-7">
+        {error && (
+          <div className="mb-5 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
           </div>
+        )}
 
-          {success && (
-            <div className="rounded-lg border border-emerald/50 bg-emerald/10 p-4 mb-6">
-              <p className="text-sm text-emerald-700">{success}</p>
-            </div>
-          )}
-
+        {success ? (
+          <div className="flex flex-col items-center py-6 text-center">
+            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/10 text-accent">
+              <CheckCircle2 className="h-7 w-7" />
+            </span>
+            <h2 className="mt-4 text-xl font-bold">Account created</h2>
+            <p className="mt-2 text-sm text-muted-foreground">{success}</p>
+            <Link href="/login" className="btn btn-primary mt-6">
+              Go to sign in <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
+        ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
-            {error && (
-              <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-                <p className="text-sm text-destructive">{error}</p>
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <label className="block text-sm font-medium">Full Name</label>
+            <div className="space-y-1.5">
+              <label htmlFor="name" className="text-sm font-medium">
+                Full name
+              </label>
               <div className="relative">
-                <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  type="text"
-                  placeholder="John Doe"
+                  id="name"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Ada Lovelace"
+                  autoComplete="name"
                   required
                   className="pl-10"
                 />
               </div>
             </div>
 
-            <div className="space-y-2">
-              <label className="block text-sm font-medium">Email Address</label>
+            <div className="space-y-1.5">
+              <label htmlFor="email" className="text-sm font-medium">
+                Email address
+              </label>
               <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
+                  id="email"
                   type="email"
-                  placeholder="you@example.com"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="you@company.com"
+                  autoComplete="email"
                   required
                   className="pl-10"
                 />
               </div>
             </div>
 
-            <div className="space-y-2">
-              <label className="block text-sm font-medium">Password</label>
+            <div className="space-y-1.5">
+              <label htmlFor="password" className="text-sm font-medium">
+                Password
+              </label>
               <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  type="password"
-                  placeholder="••••••••"
+                  id="password"
+                  type={showPassword ? "text" : "password"}
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="At least 8 characters"
+                  autoComplete="new-password"
+                  required
+                  className="pl-10 pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              {password && (
+                <div className="flex items-center gap-2 pt-1">
+                  <div className="flex flex-1 gap-1">
+                    {[0, 1, 2, 3].map((index) => (
+                      <span
+                        key={index}
+                        className={`h-1 flex-1 rounded-full ${
+                          index < score ? colors[score] : "bg-muted"
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  <span className="text-[11px] text-muted-foreground">
+                    {labels[score]}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="confirm" className="text-sm font-medium">
+                Confirm password
+              </label>
+              <div className="relative">
+                <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="confirm"
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  placeholder="Repeat your password"
+                  autoComplete="new-password"
                   required
                   className="pl-10"
                 />
+                {confirmPassword && confirmPassword === password && (
+                  <Check className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-accent" />
+                )}
               </div>
             </div>
 
-            <div className="space-y-2">
-              <label className="block text-sm font-medium">Confirm Password</label>
-              <Input
-                type="password"
-                placeholder="••••••••"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
+            <label className="flex items-start gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={accepted}
+                onChange={(event) => setAccepted(event.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-input accent-primary"
               />
-            </div>
-
-            <Button type="submit" className="w-full py-3" disabled={loading}>
-              {loading ? "Creating account…" : "Create Account"}
-            </Button>
-
-            <div className="relative my-6">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t border-border"></span>
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">Or</span>
-              </div>
-            </div>
-
-            <Button
-              variant="outline"
-              className="w-full py-3"
-              onClick={() => {
-                window.location.href = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/v1/auth/google/login`;
-              }}
-            >
-              <span className="flex items-center justify-center gap-2">
-                <span>G</span>
-                Sign up with Google
+              <span>
+                I agree to the{" "}
+                <Link href="/documentation" className="font-medium text-primary hover:underline">
+                  acceptable use policy
+                </Link>{" "}
+                and terms of service.
               </span>
-            </Button>
+            </label>
 
-            <p className="text-center text-sm text-muted-foreground mt-4">
-              Already have an account?{" "}
-              <Link href="/login" className="font-medium text-primary hover:underline">
-                Login
-              </Link>
-            </p>
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn btn-primary w-full py-3 disabled:opacity-60"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Creating account…
+                </>
+              ) : (
+                <>
+                  Create free account <ArrowRight className="h-4 w-4" />
+                </>
+              )}
+            </button>
           </form>
-        </div>
+        )}
       </div>
-
-      <footer className="border-t border-border bg-muted/50 mt-auto">
-        <div className="container mx-auto px-4 py-8">
-          <p className="text-sm text-muted-foreground text-center">
-            DELETE API Platform &copy; 2026. Built for developers.
-          </p>
-        </div>
-      </footer>
-    </div>
+    </AuthShell>
   );
 }

@@ -1,6 +1,7 @@
-import axios, { AxiosInstance, InternalAxiosRequestConfig } from "axios";
+import axios, { AxiosInstance } from "axios";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/v1/dlt";
+export const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE,
@@ -8,22 +9,28 @@ export const api: AxiosInstance = axios.create({
   withCredentials: true,
 });
 
-api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  // Cookies are sent automatically via withCredentials: true
-  return config;
-});
+export type ApiError = { detail?: string };
 
-api.interceptors.response.use(
-  (res) => res,
-  async (err) => {
-    if (err.response?.status === 401) {
-      if (typeof window !== "undefined") {
-        // Token expired or invalid - redirect to login
-        window.location.href = "/login?expired=true";
-      }
-    }
-    return Promise.reject(err);
+export async function apiFetch<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    ...init,
+    headers: {
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...init.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as ApiError;
+    throw new Error(data.detail || `Request failed (${response.status})`);
   }
-);
+
+  if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
+}
 
 export type { AxiosInstance };

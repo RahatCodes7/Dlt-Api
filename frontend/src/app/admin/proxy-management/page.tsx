@@ -1,287 +1,400 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Trash2, RefreshCw, Play, Pause, Save, Plus } from "lucide-react";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import * as React from "react";
+import {
+  Activity,
+  CheckCircle2,
+  Pause,
+  Play,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { StatCard } from "@/components/dashboard/stat-card";
+import { apiFetch } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 interface Proxy {
   id: number;
   type: string;
   host: string;
   port: number;
-  user?: string;
-  platform?: string;
+  user?: string | null;
+  platform?: string | null;
   status: string;
-  last_checked?: string;
-  created_at: string;
+  last_checked?: string | null;
 }
 
+interface CheckResult {
+  id: number;
+  ok: boolean;
+  latency_ms?: number;
+  ip?: string | null;
+  error?: string;
+}
+
+const formatChecked = (value?: string | null) => {
+  if (!value) return "Never";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
 export default function ProxyManagementPage() {
-  const [proxies, setProxies] = useState<Proxy[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [type, setType] = useState("http");
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState("");
-  const [user, setUser] = useState("");
-  const [password, setPassword] = useState("");
-  const [platform, setPlatform] = useState("");
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [proxies, setProxies] = React.useState<Proxy[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [busy, setBusy] = React.useState<number | null>(null);
+  const [checking, setChecking] = React.useState<number | null>(null);
+  const [checks, setChecks] = React.useState<Record<number, CheckResult>>({});
+  const [type, setType] = React.useState("http");
+  const [host, setHost] = React.useState("");
+  const [port, setPort] = React.useState("");
+  const [user, setUser] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [platform, setPlatform] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [success, setSuccess] = React.useState("");
 
-  useEffect(() => {
-    fetchProxies();
-  }, []);
-
-  async function fetchProxies() {
+  const loadProxies = React.useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/v1/admin/proxies`, {
-        credentials: "include",
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setProxies(data);
-      } else {
-        setError("Failed to load proxies");
-      }
-    } catch (err) {
-      setError("Network error");
+      const data = await apiFetch<Proxy[]>("/v1/admin/proxies");
+      setProxies(data);
+      setError("");
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Failed to load proxies");
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  async function addProxy() {
+  React.useEffect(() => {
+    let active = true;
+    const run = async () => {
+      try {
+        const data = await apiFetch<Proxy[]>("/v1/admin/proxies");
+        if (!active) return;
+        setProxies(data);
+        setError("");
+      } catch (exc) {
+        if (!active) return;
+        setError(exc instanceof Error ? exc.message : "Failed to load proxies");
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    run();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const notify = (message: string) => {
+    setSuccess(message);
+    setError("");
+    window.setTimeout(() => setSuccess(""), 3500);
+  };
+
+  const addProxy = async (event: React.FormEvent) => {
+    event.preventDefault();
     if (!host || !port) {
       setError("Host and port are required");
       return;
     }
     try {
-      const res = await fetch(`${API_BASE}/v1/admin/proxies`, {
+      await apiFetch("/v1/admin/proxies", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({
           type,
           host,
-          port: parseInt(port),
+          port: Number.parseInt(port, 10),
           user: user || undefined,
           password: password || undefined,
           platform: platform || undefined,
         }),
       });
-      if (res.ok) {
-        setSuccess("Proxy added successfully");
-        setHost("");
-        setPort("");
-        setUser("");
-        setPassword("");
-        setPlatform("");
-        fetchProxies();
-      } else {
-        const data = await res.json();
-        setError(data.detail || "Failed to add proxy");
-      }
-    } catch (err) {
-      setError("Network error");
+      setHost("");
+      setPort("");
+      setUser("");
+      setPassword("");
+      setPlatform("");
+      notify("Proxy added");
+      await loadProxies();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Failed to add proxy");
     }
-  }
+  };
 
-  async function deleteProxy(id: number) {
+  const deleteProxy = async (id: number) => {
     if (!window.confirm("Delete this proxy?")) return;
+    setBusy(id);
     try {
-      const res = await fetch(`${API_BASE}/v1/admin/proxies/${id}`, {
-        method: "DELETE",
-        credentials: "include",
-      });
-      if (res.ok) {
-        setSuccess("Proxy deleted");
-        fetchProxies();
-      } else {
-        setError("Failed to delete proxy");
-      }
-    } catch (err) {
-      setError("Network error");
+      await apiFetch(`/v1/admin/proxies/${id}`, { method: "DELETE" });
+      notify("Proxy deleted");
+      await loadProxies();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Failed to delete proxy");
+    } finally {
+      setBusy(null);
     }
-  }
+  };
 
-  async function toggleProxy(id: number, currentStatus: string) {
+  const toggleProxy = async (proxy: Proxy) => {
+    setBusy(proxy.id);
     try {
-      const res = await fetch(`${API_BASE}/v1/admin/proxies/${id}/toggle`, {
-        method: "PATCH",
-        credentials: "include",
-      });
-      if (res.ok) {
-        setSuccess(`Proxy ${currentStatus === "active" ? "paused" : "activated"}`);
-        fetchProxies();
-      } else {
-        setError("Failed to toggle proxy");
-      }
-    } catch (err) {
-      setError("Network error");
+      await apiFetch(`/v1/admin/proxies/${proxy.id}/toggle`, { method: "PATCH" });
+      notify(proxy.status === "active" ? "Proxy paused" : "Proxy activated");
+      await loadProxies();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Failed to toggle proxy");
+    } finally {
+      setBusy(null);
     }
-  }
+  };
+
+  const checkProxy = async (id: number) => {
+    setChecking(id);
+    try {
+      const result = await apiFetch<CheckResult>(`/v1/admin/proxies/${id}/check`, {
+        method: "POST",
+      });
+      setChecks((current) => ({ ...current, [id]: result }));
+      if (!result.ok) {
+        setError(result.error || "Proxy check failed");
+      } else {
+        setError("");
+      }
+      await loadProxies();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Proxy check failed");
+    } finally {
+      setChecking(null);
+    }
+  };
+
+  const active = proxies.filter((proxy) => proxy.status === "active").length;
+  const inactive = proxies.length - active;
+  const platforms = new Set(
+    proxies.map((proxy) => proxy.platform).filter((value): value is string => Boolean(value)),
+  ).size;
 
   return (
-    <div className="px-6 py-8">
-      <div className="flex flex-col md:flex-row justify-between items-end mb-8">
-        <div>
-          <h1 className="text-3xl font-bold">Proxy Management</h1>
-          <p className="text-muted-foreground">
-            Configure and rotate proxies for download requests to avoid rate limits.
-          </p>
-        </div>
-        <Button onClick={fetchProxies}>
-          <RefreshCw className="h-4 w-4 mr-2" /> Refresh
-        </Button>
+    <div>
+      <PageHeader
+        eyebrow="Infrastructure"
+        title="Proxy management"
+        description="Configure and rotate proxies for download requests to avoid rate limits."
+        actions={
+          <button type="button" className="btn btn-outline" onClick={loadProxies}>
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </button>
+        }
+      />
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Active proxies" value={String(active)} hint={`${proxies.length} total`} icon={ShieldCheck} tone="primary" />
+        <StatCard label="Paused" value={String(inactive)} hint="excluded from rotation" icon={Pause} tone="amber" />
+        <StatCard label="Platforms" value={String(platforms)} hint="scoped proxies" icon={Activity} tone="blue" />
+        <StatCard label="Rotation mode" value="Auto" hint="direct → proxy fallback" icon={RefreshCw} tone="accent" />
       </div>
 
       {error && (
-        <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 mb-6">
-          <p className="text-sm text-destructive">{error}</p>
+        <div className="mt-4 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {error}
         </div>
       )}
       {success && (
-        <div className="rounded-lg border border-emerald/50 bg-emerald/10 p-4 mb-6">
-          <p className="text-sm text-emerald-700">{success}</p>
+        <div className="mt-4 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-accent">
+          {success}
         </div>
       )}
 
-      {/* Add Proxy Form */}
-      <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-card p-6 mb-8">
-        <h3 className="font-bold text-lg mb-6">Add New Proxy</h3>
-        <form onSubmit={(e) => { e.preventDefault(); addProxy(); }} className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="space-y-2">
-            <label className="block text-sm font-medium">Type</label>
-            <Input
+      <form onSubmit={addProxy} className="surface mt-4 p-5">
+        <h2 className="mb-4 font-semibold">Add new proxy</h2>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="space-y-1.5">
+            <label htmlFor="proxy-type" className="text-sm font-medium">Type</label>
+            <select
+              id="proxy-type"
               value={type}
-              onChange={(e) => setType(e.target.value)}
-              placeholder="http"
-            />
+              onChange={(event) => setType(event.target.value)}
+              className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="http">http</option>
+              <option value="https">https</option>
+              <option value="socks5">socks5</option>
+            </select>
           </div>
-          <div className="space-y-2">
-            <label className="block text-sm font-medium">Host</label>
-            <Input
+          <div className="space-y-1.5">
+            <label htmlFor="proxy-host" className="text-sm font-medium">Host</label>
+            <input
+              id="proxy-host"
               value={host}
-              onChange={(e) => setHost(e.target.value)}
+              onChange={(event) => setHost(event.target.value)}
               placeholder="136.162.138.42"
+              className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
-          <div className="space-y-2">
-            <label className="block text-sm font-medium">Port</label>
-            <Input
+          <div className="space-y-1.5">
+            <label htmlFor="proxy-port" className="text-sm font-medium">Port</label>
+            <input
+              id="proxy-port"
               value={port}
-              onChange={(e) => setPort(e.target.value)}
+              onChange={(event) => setPort(event.target.value)}
               placeholder="41217"
               type="number"
+              className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
-          <div className="space-y-2">
-            <label className="block text-sm font-medium">Username</label>
-            <Input
+          <div className="space-y-1.5">
+            <label htmlFor="proxy-user" className="text-sm font-medium">Username</label>
+            <input
+              id="proxy-user"
               value={user}
-              onChange={(e) => setUser(e.target.value)}
+              onChange={(event) => setUser(event.target.value)}
               placeholder="optional"
+              className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
-          <div className="space-y-2">
-            <label className="block text-sm font-medium">Password</label>
-            <Input
+          <div className="space-y-1.5">
+            <label htmlFor="proxy-password" className="text-sm font-medium">Password</label>
+            <input
+              id="proxy-password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(event) => setPassword(event.target.value)}
               type="password"
               placeholder="optional"
+              className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
-          <div className="space-y-2">
-            <label className="block text-sm font-medium">Platform (optional)</label>
-            <Input
+          <div className="space-y-1.5">
+            <label htmlFor="proxy-platform" className="text-sm font-medium">Platform</label>
+            <select
+              id="proxy-platform"
               value={platform}
-              onChange={(e) => setPlatform(e.target.value)}
-              placeholder="youtube, instagram, etc."
-            />
+              onChange={(event) => setPlatform(event.target.value)}
+              className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="">All platforms</option>
+              <option value="youtube">YouTube</option>
+              <option value="instagram">Instagram</option>
+              <option value="facebook">Facebook</option>
+              <option value="tiktok">TikTok</option>
+            </select>
           </div>
-          <div className="space-y-2">
-            <label className="hidden">Action</label>
-            <Button type="submit" className="w-full py-3">
-              <Plus className="h-4 w-4 mr-2" /> Add Proxy
-            </Button>
-          </div>
-        </form>
-      </div>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <button type="submit" className="btn btn-primary">
+            <Plus className="h-4 w-4" /> Add proxy
+          </button>
+        </div>
+      </form>
 
-      {/* Proxy List */}
-      <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-card">
-        <h3 className="font-bold text-lg mb-6">Active Proxies</h3>
+      <div className="surface mt-4 overflow-hidden">
+        <div className="border-b border-border px-5 py-4">
+          <h2 className="font-semibold">Proxy pool</h2>
+          <p className="text-xs text-muted-foreground">
+            Healthy proxies are rotated automatically; failed ones are retried after a backoff.
+          </p>
+        </div>
         {loading ? (
-          <div className="p-8 text-center text-muted-foreground">Loading proxies...</div>
+          <div className="px-5 py-10 text-center text-sm text-muted-foreground">Loading proxies…</div>
         ) : proxies.length === 0 ? (
-          <div className="p-8 text-center text-muted-foreground">
+          <div className="px-5 py-10 text-center text-sm text-muted-foreground">
             No proxies configured. Add one above.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="border-b border-gray-200 dark:border-gray-700 text-muted-foreground">
-                  <th className="py-4 px-6">Type</th>
-                  <th className="py-4 px-6">Host:Port</th>
-                  <th className="py-4 px-6">Username</th>
-                  <th className="py-4 px-6">Platform</th>
-                  <th className="py-4 px-6">Status</th>
-                  <th className="py-4 px-6">Added</th>
-                  <th className="py-4 px-6">Actions</th>
+                <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="px-5 py-3">Type</th>
+                  <th className="px-5 py-3">Host:Port</th>
+                  <th className="px-5 py-3">User</th>
+                  <th className="px-5 py-3">Platform</th>
+                  <th className="px-5 py-3">Status</th>
+                  <th className="px-5 py-3">Last checked</th>
+                  <th className="px-5 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {proxies.map((p) => (
-                  <tr key={p.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-muted/30">
-                    <td className="py-4 px-6 font-mono">{p.type}</td>
-                    <td className="py-4 px-6 font-mono">{p.host}:{p.port}</td>
-                    <td className="py-4 px-6">{p.user || "-"}</td>
-                    <td className="py-4 px-6">{p.platform || "all"}</td>
-                    <td className="py-4 px-6">
-                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${
-                        p.status === "active"
-                          ? "bg-emerald-100 text-emerald-700"
-                          : "bg-rose-100 text-rose-700"
-                      }`}>
-                        {p.status.charAt(0).toUpperCase() + p.status.slice(1)}
-                      </span>
-                    </td>
-                    <td className="py-4 px-6 text-muted-foreground">
-                      {new Date(p.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="py-4 px-6">
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => toggleProxy(p.id, p.status)}
-                        >
-                          {p.status === "active" ? (
-                            <>
-                              <Pause className="h-4 w-4" /> Pause
-                            </>
-                          ) : (
-                            <>
-                              <Play className="h-4 w-4" /> Activate
-                            </>
+                {proxies.map((proxy) => {
+                  const check = checks[proxy.id];
+                  return (
+                    <tr key={proxy.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                      <td className="px-5 py-4 font-mono">{proxy.type}</td>
+                      <td className="px-5 py-4 font-mono">{proxy.host}:{proxy.port}</td>
+                      <td className="px-5 py-4">{proxy.user || "—"}</td>
+                      <td className="px-5 py-4">{proxy.platform || "all"}</td>
+                      <td className="px-5 py-4">
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-semibold",
+                            proxy.status === "active"
+                              ? "bg-accent/10 text-accent"
+                              : "bg-muted text-muted-foreground",
                           )}
-                        </Button>
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => deleteProxy(p.id)}
                         >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          {proxy.status === "active" ? <CheckCircle2 className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+                          {proxy.status}
+                        </span>
+                        {check && (
+                          <span
+                            className={cn(
+                              "ml-2 text-xs",
+                              check.ok ? "text-accent" : "text-destructive",
+                            )}
+                          >
+                            {check.ok ? `${check.latency_ms}ms · ${check.ip}` : "unreachable"}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-5 py-4 text-muted-foreground">
+                        {formatChecked(proxy.last_checked)}
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="flex justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => checkProxy(proxy.id)}
+                            disabled={checking === proxy.id}
+                            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+                            aria-label="Test proxy"
+                            title="Test proxy"
+                          >
+                            <Activity className={cn("h-4 w-4", checking === proxy.id && "animate-pulse")} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => toggleProxy(proxy)}
+                            disabled={busy === proxy.id}
+                            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+                            aria-label={proxy.status === "active" ? "Pause proxy" : "Activate proxy"}
+                            title={proxy.status === "active" ? "Pause" : "Activate"}
+                          >
+                            {proxy.status === "active" ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteProxy(proxy.id)}
+                            disabled={busy === proxy.id}
+                            className="rounded-lg p-2 text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
+                            aria-label="Delete proxy"
+                            title="Delete"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

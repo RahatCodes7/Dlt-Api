@@ -122,8 +122,8 @@ class EmailService:
         """
         return await self.send_email(to, "Welcome to DELETE API Platform", html)
 
-    async def send_password_reset_email(self, to: str, token: str, name: Optional[str] = None) -> bool:
-        reset_url = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+    async def send_password_reset_email(self, to: str, code: str, name: Optional[str] = None) -> bool:
+        reset_code = code
         html = f"""
         <!DOCTYPE html>
         <html>
@@ -149,8 +149,8 @@ class EmailService:
               <h2>Reset Your Password</h2>
               <p>Hello, {name or 'there'}!</p>
               <p>We received a request to reset your password for your DELETE account.</p>
-              <a href="{reset_url}" class="btn">Reset Password</a>
-              <p style="margin-top: 24px; font-size: 14px; color: #94a3b8;">This link will expire in 1 hour.</p>
+              <div style="font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #0f172a; margin: 24px 0;">{reset_code}</div>
+              <p style="margin-top: 24px; font-size: 14px; color: #94a3b8;">This code will expire in 10 minutes.</p>
               <p>If you didn't request this, please ignore this email.</p>
             </div>
             <div class="footer">

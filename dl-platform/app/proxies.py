@@ -20,7 +20,7 @@ class ProxyRotator:
         self._max_failures = 3
 
     def _proxy_url(self, proxy: Proxy) -> str:
-        scheme = "http"
+        scheme = proxy.type or "http"
         auth = ""
         if proxy.user and proxy.pass_encrypted:
             auth = f"{proxy.user}:{proxy.pass_encrypted}@"

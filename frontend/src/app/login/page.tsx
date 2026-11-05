@@ -1,36 +1,45 @@
 "use client";
 
-import { useState } from "react";
+import * as React from "react";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { useRouter } from "next/navigation";
+import { AlertCircle, ArrowRight, Eye, EyeOff, Loader2, Lock, Mail } from "lucide-react";
+import { AuthShell } from "@/components/auth-shell";
 import { Input } from "@/components/ui/input";
-import { Mail, Lock, Eye, EyeOff, ArrowRight, Mail as MailIcon, Lock as LockIcon } from "lucide-react";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const router = useRouter();
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [showPassword, setShowPassword] = React.useState(false);
+  const [remember, setRemember] = React.useState(true);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setError("");
     setLoading(true);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/v1/auth/login`, {
+      const response = await fetch(`${API_BASE}/v1/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, remember }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.detail || "Login failed");
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError(data.detail || "Login failed. Check your email and password.");
         return;
       }
-      window.location.href = "/dashboard";
-    } catch (err) {
+      if (data.user?.role === "admin") {
+        router.push("/admin/dashboard");
+      } else {
+        router.push("/dashboard");
+      }
+    } catch {
       setError("Network error. Please try again.");
     } finally {
       setLoading(false);
@@ -38,127 +47,130 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <nav className="border-b border-border bg-background">
-        <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <span className="text-primary font-bold text-lg">DLT</span>
-            <span className="font-bold text-xl tracking-tight">DELETE<span className="text-primary">API</span></span>
+    <AuthShell
+      title="Welcome back"
+      subtitle="Sign in to manage your keys, usage, and subscriptions."
+      footer={
+        <>
+          Don&apos;t have an account?{" "}
+          <Link href="/register" className="font-semibold text-primary hover:underline">
+            Create one free
           </Link>
-        </div>
-      </nav>
+        </>
+      }
+    >
+      <div className="rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-7">
+        {error && (
+          <div className="mb-5 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
 
-      <div className="flex-1 flex items-center justify-center px-4 py-12">
-        <div className="w-full max-w-md">
-          <div className="text-center mb-8">
-            <Link href="/" className="flex items-center gap-2 mb-4 inline-block">
-              <span className="text-primary font-bold text-xl">DLT</span>
-              <span className="font-bold text-xl">DELETE API</span>
-            </Link>
-            <h2 className="text-2xl font-bold">Welcome Back!</h2>
-            <p className="text-muted-foreground">Sign in to your DELETE account</p>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <label htmlFor="email" className="text-sm font-medium">
+              Email address
+            </label>
+            <div className="relative">
+              <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="you@company.com"
+                autoComplete="email"
+                required
+                className="pl-10"
+              />
+            </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {error && (
-              <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-                <p className="text-sm text-destructive">{error}</p>
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <label className="block text-sm font-medium">Email Address</label>
-              <div className="relative">
-                <MailIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  type="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  className="pl-10"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="block text-sm font-medium">Password</label>
-              </div>
-              <div className="relative">
-                <LockIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  type={showPassword ? "text" : "password"}
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  className="pl-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-primary"
-                >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-            </div>
-
+          <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="flex items-center gap-2 cursor-pointer text-sm">
-                <input type="checkbox" className="rounded border-input" />
-                Remember me
+              <label htmlFor="password" className="text-sm font-medium">
+                Password
               </label>
-              <Link href="/forgot-password" className="text-sm text-primary hover:underline">
-                Forgot Password?
+              <Link
+                href="/forgot-password"
+                className="text-xs font-medium text-primary hover:underline"
+              >
+                Forgot password?
               </Link>
             </div>
-
-            <Button type="submit" className="w-full py-3" disabled={loading}>
-              {loading ? "Signing in…" : "Sign In"}
-            </Button>
-
-            <div className="relative my-6">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t border-border"></span>
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">Or</span>
-              </div>
+            <div className="relative">
+              <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="••••••••"
+                autoComplete="current-password"
+                required
+                className="pl-10 pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((value) => !value)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
             </div>
+          </div>
 
-            <Button
-              variant="outline"
-              className="w-full py-3"
-              onClick={() => {
-                // Google OAuth
-                window.location.href = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/v1/auth/google/login`;
-              }}
-            >
-              <span className="flex items-center justify-center gap-2">
-                <span>G</span>
-                Continue with Google
-              </span>
-            </Button>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(event) => setRemember(event.target.checked)}
+              className="h-4 w-4 rounded border-input accent-primary"
+            />
+            Keep me signed in
+          </label>
 
-            <p className="text-center text-sm text-muted-foreground mt-4">
-              Don't have an account?{" "}
-              <Link href="/register" className="font-medium text-primary hover:underline">
-                Sign Up
-              </Link>
-            </p>
-          </form>
+          <button
+            type="submit"
+            disabled={loading}
+            className="btn btn-primary w-full py-3 disabled:opacity-60"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" /> Signing in…
+              </>
+            ) : (
+              <>
+                Sign in <ArrowRight className="h-4 w-4" />
+              </>
+            )}
+          </button>
+        </form>
+
+        <div className="relative my-5">
+          <div className="absolute inset-0 flex items-center">
+            <span className="w-full border-t border-border" />
+          </div>
+          <div className="relative flex justify-center">
+            <span className="bg-card px-3 text-xs uppercase tracking-wider text-muted-foreground">
+              or
+            </span>
+          </div>
         </div>
+
+        <a href={`${API_BASE}/v1/auth/google/login`} className="btn btn-outline w-full py-3">
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-red-500 via-amber-400 to-blue-500 text-[10px] font-bold text-white">
+            G
+          </span>
+          Continue with Google
+        </a>
       </div>
 
-      <footer className="border-t border-border bg-muted/50 mt-auto">
-        <div className="container mx-auto px-4 py-8">
-          <p className="text-sm text-muted-foreground text-center">
-            DELETE API Platform &copy; 2026. Built for developers.
-          </p>
-        </div>
-      </footer>
-    </div>
+      <p className="mt-4 text-center text-xs text-muted-foreground">
+        By signing in you agree to the acceptable use policy and terms of service.
+      </p>
+    </AuthShell>
   );
 }

@@ -1,36 +1,37 @@
 "use client";
 
-import { useState } from "react";
+import * as React from "react";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, Mail } from "lucide-react";
+import { AuthShell } from "@/components/auth-shell";
 import { Input } from "@/components/ui/input";
-import { Mail } from "lucide-react";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function ForgotPasswordPage() {
-  const [email, setEmail] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [email, setEmail] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [message, setMessage] = React.useState("");
+  const [error, setError] = React.useState("");
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setError("");
     setMessage("");
     setLoading(true);
-
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/v1/auth/forgot-password`, {
+      const response = await fetch(`${API_BASE}/v1/auth/forgot-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.detail || "Failed to send reset link");
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError(data.detail || "Could not send the reset link.");
         return;
       }
-      setMessage("If the email exists, a reset link has been sent to your inbox.");
-    } catch (err) {
+      setMessage("If that email exists, a reset code is on its way.");
+    } catch {
       setError("Network error. Please try again.");
     } finally {
       setLoading(false);
@@ -38,75 +39,81 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <nav className="border-b border-border bg-background">
-        <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <span className="text-primary font-bold text-lg">DLT</span>
-            <span className="font-bold text-xl tracking-tight">DELETE<span className="text-primary">API</span></span>
+    <AuthShell
+      title="Reset your password"
+      subtitle="Enter the email tied to your account and we will send a reset code."
+      footer={
+        <>
+          Remembered it?{" "}
+          <Link href="/login" className="font-semibold text-primary hover:underline">
+            Back to sign in
           </Link>
-        </div>
-      </nav>
-
-      <div className="flex-1 flex items-center justify-center px-4 py-12">
-        <div className="w-full max-w-md">
-          <div className="text-center mb-8">
-            <Link href="/" className="flex items-center gap-2 mb-4 inline-block">
-              <span className="text-primary font-bold text-xl">DLT</span>
-              <span className="font-bold text-xl">DELETE API</span>
-            </Link>
-            <h2 className="text-2xl font-bold">Forgot Password?</h2>
-            <p className="text-muted-foreground">Enter your registered email address.</p>
+        </>
+      }
+    >
+      <div className="rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-7">
+        {error && (
+          <div className="mb-5 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
           </div>
+        )}
 
+        {message ? (
+          <div className="flex flex-col items-center py-6 text-center">
+            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/10 text-accent">
+              <CheckCircle2 className="h-7 w-7" />
+            </span>
+            <h2 className="mt-4 text-xl font-bold">Check your inbox</h2>
+            <p className="mt-2 max-w-xs text-sm text-muted-foreground">{message}</p>
+            <p className="mt-4 text-xs text-muted-foreground">
+              The code expires in 10 minutes. Check spam if it does not arrive.
+            </p>
+            <Link href="/login" className="btn btn-outline mt-6">
+              <ArrowLeft className="h-4 w-4" /> Back to sign in
+            </Link>
+          </div>
+        ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
-            {error && (
-              <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-                <p className="text-sm text-destructive">{error}</p>
-              </div>
-            )}
-            {message && (
-              <div className="rounded-lg border border-emerald/50 bg-emerald/10 p-4">
-                <p className="text-sm text-emerald-700">{message}</p>
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <label className="block text-sm font-medium">Email Address</label>
+            <div className="space-y-1.5">
+              <label htmlFor="email" className="text-sm font-medium">
+                Email address
+              </label>
               <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
+                  id="email"
                   type="email"
-                  placeholder="you@example.com"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="you@company.com"
+                  autoComplete="email"
                   required
                   className="pl-10"
                 />
               </div>
             </div>
 
-            <Button type="submit" className="w-full py-3" disabled={loading}>
-              {loading ? "Sending…" : "Send Reset Link"}
-            </Button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn btn-primary w-full py-3 disabled:opacity-60"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Sending code…
+                </>
+              ) : (
+                "Send reset code"
+              )}
+            </button>
+
+            <p className="text-center text-xs text-muted-foreground">
+              For security, we do not reveal whether an account exists for this email.
+            </p>
           </form>
-
-          <p className="text-center text-sm text-muted-foreground mt-8">
-            Remember your password?{" "}
-            <Link href="/login" className="font-medium text-primary hover:underline">
-              Back to Login
-            </Link>
-          </p>
-        </div>
+        )}
       </div>
-
-      <footer className="border-t border-border bg-muted/50 mt-auto">
-        <div className="container mx-auto px-4 py-8">
-          <p className="text-sm text-muted-foreground text-center">
-            DELETE API Platform &copy; 2026. Built for developers.
-          </p>
-        </div>
-      </footer>
-    </div>
+    </AuthShell>
   );
 }

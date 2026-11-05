@@ -10,7 +10,8 @@ interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
 }
 
 export function Select({ className, label, error, children, id, ...props }: SelectProps) {
-  const selectId = id || React.useId();
+  const generatedId = React.useId();
+  const selectId = id ?? generatedId;
   return (
     <div className="w-full">
       {label && (
@@ -41,7 +42,8 @@ interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement
 }
 
 export function Textarea({ className, label, error, helperText, id, ...props }: TextareaProps) {
-  const textareaId = id || React.useId();
+  const generatedId = React.useId();
+  const textareaId = id ?? generatedId;
   return (
     <div className="w-full">
       {label && (
@@ -69,7 +71,8 @@ interface SwitchProps extends React.InputHTMLAttributes<HTMLInputElement> {
 }
 
 export function Switch({ className, label, id, ...props }: SwitchProps) {
-  const switchId = id || React.useId();
+  const generatedId = React.useId();
+  const switchId = id ?? generatedId;
   return (
     <div className={cn("items-center", className)}>
       <input

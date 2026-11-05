@@ -1,3 +1,4 @@
+import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -150,10 +151,10 @@ async def get_api_key_user(
         )
 
     key = credentials.credentials
-    key_hash = sha256(key.encode("utf-8")).hexdigest()
+    key_hash = hash_api_key(key)
 
     result = await session.execute(
-        select(User).join(User.api_keys).where(
+        select(User).where(
             User.api_keys.any(key_hash=key_hash, status="active"),
             User.status == "active",
         )
@@ -168,9 +169,18 @@ async def get_api_key_user(
     return user
 
 
+def generate_api_key() -> str:
+    raw = secrets.token_urlsafe(settings.API_KEY_LENGTH)
+    return f"{settings.API_KEY_PREFIX}_{raw}"
+
+
+def hash_api_key(key: str) -> str:
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
 def generate_verification_token() -> str:
     return secrets.token_urlsafe(32)
 
 
 def generate_reset_token() -> str:
-    return secrets.token_urlsafe(32)
+    return f"{secrets.randbelow(1000000):06d}"
