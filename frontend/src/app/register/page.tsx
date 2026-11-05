@@ -17,7 +17,7 @@ import {
 import { AuthShell } from "@/components/auth-shell";
 import { Input } from "@/components/ui/input";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL!;
 
 function strength(password: string) {
   let score = 0;

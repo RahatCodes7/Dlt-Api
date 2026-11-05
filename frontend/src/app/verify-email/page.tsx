@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL!;
 
 function VerifyEmailContent() {
   const params = useSearchParams();

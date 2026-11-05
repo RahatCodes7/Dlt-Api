@@ -6,7 +6,7 @@ import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, Mail } from "lucide-reac
 import { AuthShell } from "@/components/auth-shell";
 import { Input } from "@/components/ui/input";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL!;
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = React.useState("");

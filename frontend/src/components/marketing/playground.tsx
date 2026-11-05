@@ -4,7 +4,7 @@ import * as React from "react";
 import { Check, Copy, Play, RotateCcw, Terminal, Loader2 } from "lucide-react";
 import { platforms } from "@/lib/content";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL!;
 
 interface Result {
   status: number;

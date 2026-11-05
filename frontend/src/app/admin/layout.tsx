@@ -24,7 +24,7 @@ import {
 import { useRouter } from "next/navigation";
 import { DashboardShell, type NavGroup, type NavItem } from "@/components/dashboard/shell";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL!;
 
 const navItems: NavItem[] = [
   { name: "Overview", href: "/admin/dashboard", icon: LayoutDashboard, group: "overview" },

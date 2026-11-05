@@ -6,7 +6,7 @@ import { ArrowRight, Check, Copy, KeyRound, Play, Rocket, Terminal } from "lucid
 import { PageHeader } from "@/components/dashboard/page-header";
 import { cn } from "@/lib/utils";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL!;
 
 const steps = [
   {
