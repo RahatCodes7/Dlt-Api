@@ -71,32 +71,7 @@ async def lifespan(app: FastAPI):
             session.add(Plan(name="Free", monthly_requests=100, price=0.0, active=True))
             await session.commit()
 
-        # Seed initial proxies if none exist
-        result = await session.execute(select(Proxy).limit(1))
-        if not result.scalar_one_or_none():
-            initial_proxies = [
-                Proxy(
-                    type="http",
-                    host="136.162.138.42",
-                    port=41217,
-                    user="6ZOGjaNvOh0LKL2",
-                    pass_encrypted="OU2sxNDE1YoKabK",
-                    platform=None,
-                    status="active",
-                ),
-                Proxy(
-                    type="http",
-                    host="136.162.138.66",
-                    port=47139,
-                    user="TI8inwlBAtrSVBR",
-                    pass_encrypted="YAPM4Ae4gSyQxEX",
-                    platform=None,
-                    status="active",
-                ),
-            ]
-            for p in initial_proxies:
-                session.add(p)
-            await session.commit()
+        # (Proxy seeding removed; manage proxies via admin panel)
 
         # Initialize proxy rotators for all platforms
         await build_platform_engines(session)

@@ -14,13 +14,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { UsageAreaChart } from "@/components/dashboard/charts";
 
-const activity = [
-  { platform: "YouTube", endpoint: "/info", status: 200, time: "2 min ago", latency: "118ms" },
-  { platform: "Instagram", endpoint: "/download", status: 200, time: "15 min ago", latency: "842ms" },
-  { platform: "Facebook", endpoint: "/info", status: 429, time: "1 hr ago", latency: "64ms" },
-  { platform: "TikTok", endpoint: "/download", status: 200, time: "3 hrs ago", latency: "610ms" },
-  { platform: "YouTube", endpoint: "/download", status: 200, time: "5 hrs ago", latency: "1.2s" },
-];
+const activity: { platform: string; endpoint: string; status: number; time: string; latency: string }[] = [];
 
 const platformMix = [
   { name: "YouTube", pct: 45, color: "bg-red-500" },

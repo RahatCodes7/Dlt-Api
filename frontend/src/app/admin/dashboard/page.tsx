@@ -13,13 +13,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { RevenueBarChart } from "@/components/dashboard/charts";
 
-const signups = [
-  { name: "Maya Chen", email: "maya@acme.dev", plan: "Starter", time: "12 min ago" },
-  { name: "Omar Haddad", email: "omar@ship.it", plan: "Free", time: "48 min ago" },
-  { name: "Lena Fischer", email: "lena@studio.co", plan: "Pro", time: "2 hrs ago" },
-  { name: "Diego Ruiz", email: "diego@north.io", plan: "Free", time: "4 hrs ago" },
-  { name: "Priya Nair", email: "priya@build.dev", plan: "Starter", time: "6 hrs ago" },
-];
+const signups: { name: string; email: string; plan: string; time: string }[] = [];
 
 const services = [
   { name: "API gateway", status: "Operational", latency: "42ms" },
