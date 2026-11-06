@@ -1304,7 +1304,12 @@ async def delete_key_api(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "platforms": list(PLATFORM_ENGINES.keys())}
+    return {
+        "status": "ok",
+        "version": settings.APP_VERSION,
+        "download_timeout": settings.DOWNLOAD_TIMEOUT_SECONDS,
+        "platforms": list(PLATFORM_ENGINES.keys()),
+    }
 
 
 @app.get("/v1/dlt/plans", response_model=list[PlanOut])

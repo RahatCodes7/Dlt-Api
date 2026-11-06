@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # App
     APP_NAME: str = "DLT API Platform"
-    APP_VERSION: str = "1.0.0"
+    APP_VERSION: str = "1.0.1"
     DEBUG: bool = False
     API_V1_STR: str = "/v1/dlt"
     SECRET_KEY: str = "change-me-in-production-32-chars"
