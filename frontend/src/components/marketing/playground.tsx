@@ -19,7 +19,7 @@ export function Playground() {
   const [url, setUrl] = React.useState("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
   const [apiKey, setApiKey] = React.useState("");
   const [format, setFormat] = React.useState("mp4");
-  const [quality, setQuality] = React.useState("");
+  const [quality, setQuality] = React.useState("480p");
   const [formatId, setFormatId] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [result, setResult] = React.useState<Result | null>(null);
@@ -80,6 +80,15 @@ export function Playground() {
         body,
         raw,
       });
+      if (response.ok && endpoint === "download" && body && typeof body === "object" && "data" in body && (body as { data?: { download_url?: string } }).data?.download_url) {
+        const downloadUrl = `${API_BASE}${(body as { data: { download_url: string } }).data.download_url}`;
+        const a = document.createElement("a");
+        a.href = downloadUrl;
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
     } catch {
       setError(
         `Could not reach the API at ${API_BASE}. Is the backend running? You can still copy the cURL request below.`,
@@ -207,9 +216,19 @@ export function Playground() {
             </div>
           )}
 
+          {endpoint === "download" && !apiKey && (
+            <div className="space-y-1.5 sm:col-span-2">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                <p className="font-medium">API key required for downloads</p>
+                <p>
+                  Create one at <a href="/dashboard/api-keys" className="underline">API Keys</a>, then paste it above.
+                </p>
+              </div>
+            </div>
+          )}
           <div className="space-y-1.5">
             <label htmlFor="key" className="text-sm font-medium">
-              API key <span className="font-normal text-muted-foreground">(optional for demo)</span>
+              API key <span className="font-normal text-muted-foreground">(required for downloads)</span>
             </label>
             <input
               id="key"
