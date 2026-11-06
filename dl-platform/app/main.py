@@ -23,6 +23,7 @@ import httpx
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.auth import (
     security as api_key_security,
@@ -1559,19 +1560,17 @@ async def admin_list_subscriptions(
     if user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     result = await session.execute(
-        select(Subscription).order_by(Subscription.created_at.desc())
+        select(Subscription)
+        .options(selectinload(Subscription.plan), selectinload(Subscription.user))
+        .order_by(Subscription.created_at.desc())
     )
     subs = result.scalars().all()
     out = []
     for sub in subs:
-        user_result = await session.execute(
-            select(User).where(User.id == sub.user_id)
-        )
-        sub_user = user_result.scalar_one_or_none()
         out.append({
             "id": sub.id,
             "user_id": sub.user_id,
-            "user_email": sub_user.email if sub_user else "unknown",
+            "user_email": sub.user.email if sub.user else "unknown",
             "plan": sub.plan,
             "status": sub.status,
             "start": sub.start,
