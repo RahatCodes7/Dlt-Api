@@ -1562,7 +1562,7 @@ async def admin_list_subscriptions(
     result = await session.execute(
         select(Subscription)
         .options(selectinload(Subscription.plan), selectinload(Subscription.user))
-        .order_by(Subscription.created_at.desc())
+        .order_by(Subscription.start.desc())
     )
     subs = result.scalars().all()
     out = []
