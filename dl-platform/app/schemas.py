@@ -2,16 +2,25 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl
 
 
 # ---- Generic response ----
+class ErrorDetail(BaseModel):
+    code: str
+    message: str
+    retry_after: Optional[int] = None
+
+
 class APIResponse(BaseModel):
     success: bool
     platform: Optional[str] = None
     data: Optional[dict] = None
     request_id: str
-    error: Optional[str] = None
+    error: Optional[ErrorDetail] = None
+    # Human-readable mirror of error.message, kept for older clients that
+    # read a flat "detail" string.
+    detail: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -23,7 +32,18 @@ class InfoRequest(BaseModel):
 
 class DownloadRequest(BaseModel):
     url: HttpUrl
+    # "mp4", "mp3", "m4a", a height such as "720p", or a raw yt-dlp selector.
     format: Optional[str] = None
+    # Preferred quality selector, e.g. "360p", "720p", "1080p", "best".
+    quality: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("quality", "resolution"),
+    )
+    # Exact yt-dlp format id, e.g. "18" or "137+140". Takes precedence.
+    format_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("format_id", "formatId"),
+    )
 
 
 # ---- Auth ----
@@ -87,12 +107,16 @@ class ProxyCreate(BaseModel):
 
 # ---- Account / quota ----
 class QuotaOut(BaseModel):
+    plan: Optional[str] = None
     user_id: int
     month: str
     limit: int
     used: int
     remaining: int
+    # Both names are returned: resets_at matches the public docs, reset_at is
+    # kept for clients built against the earlier response.
     reset_at: Optional[datetime] = None
+    resets_at: Optional[datetime] = None
 
 
 # ---- Plans / subscriptions ----

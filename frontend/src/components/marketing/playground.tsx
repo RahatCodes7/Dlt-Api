@@ -19,6 +19,8 @@ export function Playground() {
   const [url, setUrl] = React.useState("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
   const [apiKey, setApiKey] = React.useState("");
   const [format, setFormat] = React.useState("mp4");
+  const [quality, setQuality] = React.useState("");
+  const [formatId, setFormatId] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [result, setResult] = React.useState<Result | null>(null);
   const [error, setError] = React.useState("");
@@ -26,15 +28,18 @@ export function Playground() {
 
   const requestPath = `/v1/dlt/${platform}/${endpoint}`;
 
+  const requestBody = React.useMemo(() => {
+    if (endpoint !== "download") return { url };
+    if (formatId.trim()) return { url, format_id: formatId.trim() };
+    return { url, format, ...(quality ? { quality } : {}) };
+  }, [endpoint, format, formatId, quality, url]);
+
   const curl = React.useMemo(() => {
-    const body =
-      endpoint === "download"
-        ? `{ "url": "${url}", "format": "${format}" }`
-        : `{ "url": "${url}" }`;
+    const body = JSON.stringify(requestBody);
     return `curl -X POST ${PUBLIC_API_URL}${requestPath} \\\n  -H "Authorization: Bearer ${
       apiKey || "dl_live_xxxxxxxx"
     }" \\\n  -H "Content-Type: application/json" \\\n  -d '${body}'`;
-  }, [apiKey, endpoint, format, requestPath, url]);
+  }, [apiKey, requestBody, requestPath]);
 
   const copyCurl = async () => {
     try {
@@ -59,9 +64,7 @@ export function Playground() {
           "Content-Type": "application/json",
           ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         },
-        body: JSON.stringify(
-          endpoint === "download" ? { url, format } : { url },
-        ),
+        body: JSON.stringify(requestBody),
       });
       const raw = await response.text();
       let body: unknown = raw;
@@ -151,20 +154,56 @@ export function Playground() {
           </div>
 
           {endpoint === "download" && (
-            <div className="space-y-1.5">
-              <label htmlFor="format" className="text-sm font-medium">
-                Format
-              </label>
-              <select
-                id="format"
-                value={format}
-                onChange={(event) => setFormat(event.target.value)}
-                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option value="mp4">mp4</option>
-                <option value="mp3">mp3</option>
-                <option value="m4a">m4a</option>
-              </select>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label htmlFor="format" className="text-sm font-medium">
+                  Format
+                </label>
+                <select
+                  id="format"
+                  value={format}
+                  onChange={(event) => setFormat(event.target.value)}
+                  className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="mp4">mp4</option>
+                  <option value="mp3">mp3</option>
+                  <option value="m4a">m4a</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label htmlFor="quality" className="text-sm font-medium">
+                  Quality
+                </label>
+                <select
+                  id="quality"
+                  value={quality}
+                  onChange={(event) => setQuality(event.target.value)}
+                  className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="">best available</option>
+                  <option value="360p">360p</option>
+                  <option value="480p">480p</option>
+                  <option value="720p">720p</option>
+                  <option value="1080p">1080p</option>
+                  <option value="1440p">1440p</option>
+                  <option value="2160p">2160p</option>
+                </select>
+              </div>
+              <div className="space-y-1.5 sm:col-span-2">
+                <label htmlFor="formatId" className="text-sm font-medium">
+                  Format id{" "}
+                  <span className="font-normal text-muted-foreground">
+                    (overrides format and quality)
+                  </span>
+                </label>
+                <input
+                  id="formatId"
+                  value={formatId}
+                  onChange={(event) => setFormatId(event.target.value)}
+                  placeholder="e.g. 18 or 137+140"
+                  className="h-10 w-full rounded-lg border border-input bg-background px-3 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
             </div>
           )}
 

@@ -11,6 +11,7 @@ from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, HTTPException, status, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from starlette.background import BackgroundTask
@@ -39,6 +40,7 @@ from app.auth import (
 from app.config import settings
 from app.database import AsyncSessionLocal, Base, engine, get_session
 from app.email import email_service
+from app.file_store import consume_file_token, create_file_token, resolve_file_token
 from app.models import ApiKey, Plan, Proxy, Subscription, Transaction, UsageLog, User
 from app.platforms import build_platform_engines, get_engine, PLATFORM_ENGINES
 from app.quota import get_quota, increment_usage, rate_limit_check
@@ -48,6 +50,7 @@ from app.schemas import (
     ApiKeyCreatedOut,
     ApiKeyOut,
     DownloadRequest,
+    ErrorDetail,
     ForgotPasswordRequest,
     InfoRequest,
     LoginRequest,
@@ -131,7 +134,177 @@ def _is_expired(value: Optional[datetime]) -> bool:
 
 
 def _platform_response(success: bool, platform: str, request_id: str, data=None, error=None):
-    return APIResponse(success=success, platform=platform, data=data, request_id=request_id, error=error)
+    if isinstance(error, str):
+        error = ErrorDetail(code=_error_code(error, 400), message=error)
+    return APIResponse(
+        success=success,
+        platform=platform,
+        data=data,
+        request_id=request_id,
+        error=error,
+        detail=error.message if error else None,
+    )
+
+
+_ERROR_CODES = {
+    400: "INVALID_REQUEST",
+    401: "UNAUTHORIZED",
+    403: "FORBIDDEN",
+    404: "NOT_FOUND",
+    409: "CONFLICT",
+    422: "INVALID_REQUEST",
+    429: "RATE_LIMITED",
+    500: "INTERNAL_ERROR",
+    502: "UPSTREAM_ERROR",
+}
+
+_ACCOUNT_PATHS = {"account", "files", "plans", "health"}
+
+
+def _error_code(message: str, status_code: int) -> str:
+    """Map a legacy ``detail`` string to a stable machine-readable code."""
+    text = (message or "").strip().lower()
+    if text == "quota_exceeded" or "quota exceeded" in text:
+        return "QUOTA_EXCEEDED"
+    if text == "rate_limited" or "rate limit" in text:
+        return "RATE_LIMITED"
+    if "does not match platform" in text:
+        return "INVALID_URL"
+    if "unknown platform" in text:
+        return "NOT_FOUND"
+    if "api key" in text:
+        return "UNAUTHORIZED"
+    if "not found" in text or "no longer available" in text:
+        return "NOT_FOUND"
+    if "expired" in text:
+        return "EXPIRED"
+    if "unsupported url" in text:
+        return "INVALID_URL"
+    return _ERROR_CODES.get(status_code, "ERROR")
+
+
+def _engine_error_code(message: str) -> str:
+    """Map an extraction/download failure to a documented error code."""
+    text = (message or "").strip().lower()
+    if "unsupported url" in text or "invalid url" in text or "is not a valid url" in text:
+        return "INVALID_URL"
+    if any(
+        token in text
+        for token in (
+            "not available",
+            "unavailable",
+            "not found",
+            "does not exist",
+            "private video",
+            "removed",
+            "no video",
+            "404",
+        )
+    ):
+        return "NOT_FOUND"
+    return "UPSTREAM_ERROR"
+
+
+def _engine_error_status(code: str) -> int:
+    return {
+        "INVALID_URL": status.HTTP_400_BAD_REQUEST,
+        "NOT_FOUND": status.HTTP_404_NOT_FOUND,
+        "UPSTREAM_ERROR": status.HTTP_502_BAD_GATEWAY,
+    }.get(code, status.HTTP_400_BAD_REQUEST)
+
+
+def _platform_from_path(path: str) -> Optional[str]:
+    parts = [part for part in (path or "").split("/") if part]
+    if len(parts) >= 3 and parts[0] == "v1" and parts[1] == "dlt" and parts[2] not in _ACCOUNT_PATHS:
+        return parts[2]
+    return None
+
+
+def _error_response(
+    *,
+    platform: Optional[str],
+    request_id: Optional[str],
+    code: str,
+    message: str,
+    status_code: int,
+    retry_after: Optional[int] = None,
+    extra_headers: Optional[dict] = None,
+) -> JSONResponse:
+    payload = {
+        "success": False,
+        "platform": platform,
+        "request_id": request_id or _request_id(),
+        "data": None,
+        "error": {"code": code, "message": message, "retry_after": retry_after},
+        "detail": message,
+    }
+    headers = dict(extra_headers or {})
+    if retry_after is not None:
+        headers["Retry-After"] = str(retry_after)
+    return JSONResponse(status_code=status_code, content=payload, headers=headers or None)
+
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request: Request, exc: HTTPException):
+    detail = exc.detail
+    if isinstance(detail, dict):
+        raw_message = str(detail.get("message") or detail.get("detail") or "Request failed")
+        code = str(detail.get("code") or _error_code(raw_message, exc.status_code))
+        retry_after = detail.get("retry_after")
+    else:
+        raw_message = str(detail)
+        code = _error_code(raw_message, exc.status_code)
+        retry_after = None
+
+    message = {
+        "QUOTA_EXCEEDED": "Monthly request quota reached.",
+        "RATE_LIMITED": "Too many requests. Please retry shortly.",
+        "UNAUTHORIZED": "Missing or invalid API key.",
+    }.get(code, raw_message)
+
+    if retry_after is None and code == "RATE_LIMITED":
+        retry_after = 60
+    if exc.headers and exc.headers.get("Retry-After") is not None:
+        retry_after = int(exc.headers["Retry-After"])
+
+    passthrough_headers = {
+        key: value
+        for key, value in (exc.headers or {}).items()
+        if key.lower() != "retry-after"
+    }
+
+    return _error_response(
+        platform=_platform_from_path(request.url.path),
+        request_id=_request_id(),
+        code=code,
+        message=message,
+        status_code=exc.status_code,
+        retry_after=retry_after,
+        extra_headers=passthrough_headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = exc.errors()
+    message = "Invalid request body."
+    code = "INVALID_REQUEST"
+    if errors:
+        first = errors[0]
+        location = ".".join(
+            str(part) for part in first.get("loc", ()) if part not in ("body", "query", "path")
+        )
+        reason = first.get("msg", "Invalid value")
+        message = f"{location}: {reason}" if location else reason
+        if location.split(".")[-1] in {"url", "format", "quality", "format_id"}:
+            code = "INVALID_URL" if "url" in location else "INVALID_REQUEST"
+    return _error_response(
+        platform=_platform_from_path(request.url.path),
+        request_id=_request_id(),
+        code=code,
+        message=message,
+        status_code=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 def _user_payload(user: User) -> dict:
@@ -146,17 +319,8 @@ def _user_payload(user: User) -> dict:
     }
 
 
-def _month_reset_at(now: Optional[datetime] = None) -> datetime:
-    now = now or datetime.now(timezone.utc)
-    if now.month == 12:
-        return now.replace(year=now.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-    return now.replace(month=now.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
-
-
 async def _account_quota(user: User, session: AsyncSession) -> dict:
-    quota = await get_quota(user.id, session)
-    quota["reset_at"] = _month_reset_at()
-    return quota
+    return await get_quota(user.id, session)
 
 
 async def _record_usage(
@@ -881,15 +1045,23 @@ async def platform_info(
     rl_key = f"ratelimit:{user.id}:{platform}:info"
     allowed = await rate_limit_check(rl_key, limit=30, window_seconds=60)
     if not allowed:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="RATE_LIMITED")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="RATE_LIMITED",
+            headers={"Retry-After": "60"},
+        )
 
     info, error = await engine_.extract_info(str(body.url))
     if error:
         await increment_usage(user.id, session)
         await _record_usage(session, user, platform, str(body.url), False)
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content=_platform_response(False, platform, rid, error=error).model_dump(),
+        code = _engine_error_code(error)
+        return _error_response(
+            platform=platform,
+            request_id=rid,
+            code=code,
+            message=error,
+            status_code=_engine_error_status(code),
         )
 
     await increment_usage(user.id, session)
@@ -916,15 +1088,26 @@ async def platform_download(
     rl_key = f"ratelimit:{user.id}:{platform}:download"
     allowed = await rate_limit_check(rl_key, limit=10, window_seconds=60)
     if not allowed:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="RATE_LIMITED")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="RATE_LIMITED",
+            headers={"Retry-After": "60"},
+        )
 
-    file_path, info, error = await engine_.download(str(body.url), format_id=body.format)
+    # Explicit format id wins, then requested quality, then the legacy
+    # ``format`` field ("mp4"/"mp3"/"720p"/...).
+    selected_format = body.format_id or body.quality or body.format
+    file_path, info, error = await engine_.download(str(body.url), format_id=selected_format)
     if error:
         await increment_usage(user.id, session)
         await _record_usage(session, user, platform, str(body.url), False)
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content=_platform_response(False, platform, rid, error=error).model_dump(),
+        code = _engine_error_code(error)
+        return _error_response(
+            platform=platform,
+            request_id=rid,
+            code=code,
+            message=error,
+            status_code=_engine_error_status(code),
         )
 
     await increment_usage(user.id, session)
@@ -936,14 +1119,8 @@ async def platform_download(
             file_size = None
     await _record_usage(session, user, platform, str(body.url), True, file_size=file_size)
 
-    file_token = uuid.uuid4().hex
+    file_token = create_file_token(file_path, settings.FILE_URL_TTL_SECONDS)
     download_url = f"/v1/dlt/files/{file_token}"
-    if not hasattr(app.state, "download_map"):
-        app.state.download_map = {}
-    app.state.download_map[file_token] = (
-        file_path,
-        time.time() + settings.FILE_URL_TTL_SECONDS,
-    )
 
     data = {
         "download_url": download_url,
@@ -951,32 +1128,28 @@ async def platform_download(
         "duration": (info or {}).get("duration"),
         "extractor": (info or {}).get("extractor"),
         "expires_in": settings.FILE_URL_TTL_SECONDS,
+        "file_size": file_size,
     }
     return _platform_response(True, platform, rid, data=data)
 
 
 @app.get("/v1/dlt/files/{file_token}")
 async def download_file(file_token: str):
-    download_map = getattr(app.state, "download_map", {})
-    entry = download_map.get(file_token)
+    entry = resolve_file_token(file_token)
     if not entry:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found or expired")
 
-    file_path, expires_at = entry
-    if time.time() > expires_at or not os.path.exists(file_path):
-        download_map.pop(file_token, None)
-        if os.path.exists(file_path):
-            os.remove(file_path)
+    file_path, _expires_at = entry
+    if not os.path.exists(file_path):
+        consume_file_token(file_token)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File no longer available")
 
     def cleanup():
-        download_map.pop(file_token, None)
+        consume_file_token(file_token)
         try:
             os.remove(file_path)
         except OSError:
             pass
-
-    import urllib.parse
 
     def iter_file():
         with open(file_path, "rb") as f:
@@ -986,17 +1159,20 @@ async def download_file(file_token: str):
                     break
                 yield chunk
 
+    import urllib.parse
+
     raw_name = os.path.basename(file_path)
-    try:
-        safe_name = raw_name.encode("latin-1") and raw_name
-    except UnicodeEncodeError:
-        safe_name = "download"
-    encoded_name = urllib.parse.quote(raw_name)
+    # HTTP headers are latin-1; send an ASCII fallback plus RFC 5987 UTF-8.
+    ascii_name = raw_name.encode("ascii", "replace").decode("ascii").replace("?", "_")
+    encoded_name = urllib.parse.quote(raw_name, safe="")
     return StreamingResponse(
         iter_file(),
         media_type="application/octet-stream",
         headers={
-            "Content-Disposition": f'attachment; filename="{safe_name}"; filename*=UTF-8\'\'{encoded_name}'
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_name}"; '
+                f"filename*=UTF-8''{encoded_name}"
+            )
         },
         background=BackgroundTask(cleanup),
     )

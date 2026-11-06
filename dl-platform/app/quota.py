@@ -31,6 +31,29 @@ def month_key() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
+def month_reset_at(now: Optional[datetime] = None) -> datetime:
+    """First instant of the next UTC month, when the usage counter resets."""
+    now = now or datetime.now(timezone.utc)
+    if now.month == 12:
+        return now.replace(
+            year=now.year + 1,
+            month=1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    return now.replace(
+        month=now.month + 1,
+        day=1,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+
+
 async def _memory_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
     now = time.monotonic()
     async with _memory_lock:
@@ -83,14 +106,19 @@ async def get_quota(user_id: int, session: AsyncSession) -> dict:
     # plan limit
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one()
+    plan_name = user.plan.name if user and user.plan else None
     limit = user.plan.monthly_requests if user and user.plan else 0
+    reset_at = month_reset_at()
 
     return {
+        "plan": plan_name,
         "user_id": user_id,
         "month": month,
         "limit": limit,
         "used": used,
         "remaining": max(limit - used, 0),
+        "reset_at": reset_at,
+        "resets_at": reset_at,
     }
 
 

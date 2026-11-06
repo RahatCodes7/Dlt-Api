@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import tempfile
+import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -78,12 +79,16 @@ class YtDlpEngine(PlatformEngine):
             opts["ffmpeg_location"] = FFMPEG_PATH
         if download:
             opts["outtmpl"] = os.path.join(tempfile.gettempdir(), "dlt_%(id)s.%(ext)s")
-            # Avoid ffmpeg-only merge/conversion so downloads work on hosts
-            # without ffmpeg installed.
-            requested = (format_id or "").lower()
-            if requested in {"mp3", "m4a", "audio"}:
+            # A playlist would drop several files into the temp dir and make
+            # "the downloaded file" ambiguous, so always take a single item.
+            opts["noplaylist"] = True
+
+            requested = (format_id or "").strip()
+            selector = requested.lower()
+
+            if selector in {"mp3", "m4a", "audio"}:
                 opts["format"] = "bestaudio[ext=m4a]/bestaudio/best"
-                if requested == "mp3" and FFMPEG_PATH:
+                if selector == "mp3" and FFMPEG_PATH:
                     opts["postprocessors"] = [
                         {
                             "key": "FFmpegExtractAudio",
@@ -91,23 +96,26 @@ class YtDlpEngine(PlatformEngine):
                             "preferredquality": "192",
                         }
                     ]
+            elif selector in {"", "mp4", "video", "best"}:
+                # Best available video + audio. Prefer mp4/m4a first so the
+                # merged result is broadly playable, then fall back to anything.
+                opts["format"] = "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b"
+                if FFMPEG_PATH:
+                    opts["merge_output_format"] = "mp4"
+            elif selector.endswith("p") and selector[:-1].isdigit():
+                height = int(selector[:-1])
+                opts["format"] = (
+                    f"bv*[height<={height}][ext=mp4]+ba[ext=m4a]/"
+                    f"b[height<={height}][ext=mp4]/"
+                    f"bv*[height<={height}]+ba/b[height<={height}]/b"
+                )
+                if FFMPEG_PATH:
+                    opts["merge_output_format"] = "mp4"
             else:
-                height = 720
-                if format_id and format_id.lower().rstrip("p") in {"360", "480", "720", "1080", "1440", "2160"}:
-                    height = int(format_id.lower().rstrip("p"))
-                elif requested in {"mp4", "video"} or not format_id:
-                    height = 720
-                if format_id and format_id.lower() not in {"mp4", "video"} and not (
-                    format_id.lower().rstrip("p") in {"360", "480", "720", "1080", "1440", "2160"}
-                ):
-                    opts["format"] = format_id
-                else:
-                    opts["format"] = (
-                        f"bv*[height<={height}][ext=mp4]+ba[ext=m4a]/"
-                        f"b[height<={height}][ext=mp4]/bv*+ba/b"
-                    )
-                    if FFMPEG_PATH:
-                        opts["merge_output_format"] = "mp4"
+                # Exact yt-dlp format id / selector, e.g. "18" or "137+140".
+                opts["format"] = requested
+                if FFMPEG_PATH and "+" in requested:
+                    opts["merge_output_format"] = "mp4"
         return opts
 
     def _run_extract_info(
@@ -139,7 +147,11 @@ class YtDlpEngine(PlatformEngine):
                         if os.path.isfile(fpath):
                             ext = os.path.splitext(fname)[1]
                             safe_title = re.sub(r"[^\w\-_\.]", "_", info.get("title", "video"))[:50]
-                            permanent = DOWNLOAD_DIR / f"{safe_title}_{self.platform}{ext}"
+                            # A unique suffix prevents two concurrent requests
+                            # (or two users downloading the same video) from
+                            # overwriting/deleting each other's file.
+                            suffix = uuid.uuid4().hex[:12]
+                            permanent = DOWNLOAD_DIR / f"{safe_title}_{self.platform}_{suffix}{ext}"
                             os.replace(fpath, permanent)
                             return str(permanent), info, None
                     return None, info, "No file downloaded"

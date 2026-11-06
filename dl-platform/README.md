@@ -45,13 +45,21 @@ dl-platform/
 
 ## API (base path `/v1/dlt/`)
 - `POST /{platform}/info` — media info + formats
-- `POST /{platform}/download` — authorized download
-- `GET /account/quota` — remaining quota
+- `POST /{platform}/download` — authorized download. Body: `url` plus
+  `format` (`mp4` | `mp3` | `m4a` | height like `720p`), `quality`
+  (`360p`…`2160p` | `best`) or `format_id` (exact yt-dlp id, wins over the rest).
+- `GET /files/{token}` — temporary download URL (no auth, expires in
+  `FILE_URL_TTL_SECONDS`, default 300s)
+- `GET /account/quota` — remaining quota (`plan`, `limit`, `used`, `remaining`,
+  `resets_at`)
 - `GET /account/keys` — list API keys
 - `POST /account/keys` — generate API key
 - `DELETE /account/keys/{id}` — revoke API key
 
 Auth: `Authorization: Bearer dl_live_...`
+
+Public origin: `https://dltapi.cc.cd` (proxies `/v1/*` to the backend at
+`https://dltbackend.cc.cd`).
 
 ## Local dev
 ```bash

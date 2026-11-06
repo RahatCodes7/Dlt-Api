@@ -29,7 +29,8 @@ export default async function PlatformAPIPage({
   -H "Content-Type: application/json" \\
   -d '{
     "url": "https://${platform.slug}.com/…",
-    "format": "mp4"
+    "format": "mp4",
+    "quality": "1080p"
   }'`;
 
   const responseExample = `{
@@ -40,12 +41,28 @@ export default async function PlatformAPIPage({
     "title": "Media title",
     "duration": 212,
     "thumbnail": "https://…/thumb.jpg",
+    "uploader": "Channel name",
     "formats": [
-      { "id": "video", "ext": "mp4", "quality": "1080p" },
-      { "id": "audio", "ext": "m4a", "quality": "128kbps" }
+      {
+        "format_id": "137",
+        "ext": "mp4",
+        "resolution": "1920x1080",
+        "filesize": 48210432,
+        "vcodec": "avc1.640028",
+        "acodec": "none"
+      },
+      {
+        "format_id": "140",
+        "ext": "m4a",
+        "resolution": "audio only",
+        "filesize": 3421184,
+        "vcodec": "none",
+        "acodec": "mp4a.40.2"
+      }
     ]
   },
-  "error": null
+  "error": null,
+  "detail": null
 }`;
 
   return (
@@ -122,6 +139,7 @@ export default async function PlatformAPIPage({
                       { field: "url", type: "string", required: "yes" },
                       { field: "format", type: "string", required: "download only" },
                       { field: "quality", type: "string", required: "no" },
+                      { field: "format_id", type: "string", required: "no" },
                     ].map((row) => (
                       <tr key={row.field} className="border-b border-border last:border-0">
                         <td className="py-3 font-mono text-xs">{row.field}</td>

@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from app.database import AsyncSessionLocal
+from app.file_store import cleanup_expired_tokens
 from app.models import UsageLog
 
 
@@ -23,5 +24,8 @@ async def run_cleanup() -> None:
             deleted = await cleanup_old_usage_logs()
             if deleted:
                 print(f"[cleanup] deleted {deleted} old usage logs")
+            expired_files = cleanup_expired_tokens()
+            if expired_files:
+                print(f"[cleanup] removed {expired_files} expired download tokens")
         except Exception as exc:  # pragma: no cover - background task
             print(f"[cleanup] error: {exc}")

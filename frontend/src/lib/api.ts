@@ -19,7 +19,10 @@ export const api: AxiosInstance = axios.create({
   withCredentials: true,
 });
 
-export type ApiError = { detail?: string };
+export type ApiError = {
+  detail?: string;
+  error?: { code?: string; message?: string };
+};
 
 export async function apiFetch<T>(
   path: string,
@@ -36,7 +39,7 @@ export async function apiFetch<T>(
 
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as ApiError;
-    const detail = data.detail;
+    const detail = data.error?.message ?? data.detail;
     throw new Error(
       typeof detail === "string"
         ? detail
