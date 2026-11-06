@@ -1,9 +1,12 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+from app.config import settings
 from app.database import AsyncSessionLocal
-from app.file_store import cleanup_expired_tokens
+from app.file_store import cleanup_expired_tokens, cleanup_orphan_files
 from app.models import UsageLog
+
+CLEANUP_INTERVAL_SECONDS = 300
 
 
 async def cleanup_old_usage_logs(days: int = 90) -> int:
@@ -17,15 +20,28 @@ async def cleanup_old_usage_logs(days: int = 90) -> int:
         return result.rowcount
 
 
+def cleanup_downloads() -> tuple[int, int]:
+    expired = cleanup_expired_tokens()
+    orphans = cleanup_orphan_files(settings.DOWNLOAD_ORPHAN_MAX_AGE_SECONDS)
+    return expired, orphans
+
+
 async def run_cleanup() -> None:
+    last_usage_sweep = 0.0
     while True:
-        await asyncio.sleep(86400)  # run daily
         try:
-            deleted = await cleanup_old_usage_logs()
-            if deleted:
-                print(f"[cleanup] deleted {deleted} old usage logs")
-            expired_files = cleanup_expired_tokens()
-            if expired_files:
-                print(f"[cleanup] removed {expired_files} expired download tokens")
+            expired, orphans = cleanup_downloads()
+            if expired or orphans:
+                print(
+                    f"[cleanup] removed {expired} expired tokens, "
+                    f"{orphans} orphaned files"
+                )
+            now = asyncio.get_running_loop().time()
+            if now - last_usage_sweep >= 86400:
+                deleted = await cleanup_old_usage_logs()
+                if deleted:
+                    print(f"[cleanup] deleted {deleted} old usage logs")
+                last_usage_sweep = now
         except Exception as exc:  # pragma: no cover - background task
             print(f"[cleanup] error: {exc}")
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)

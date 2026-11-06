@@ -41,7 +41,10 @@ class Settings(BaseSettings):
     API_KEY_LENGTH: int = 32
 
     # Download limits
-    DOWNLOAD_TIMEOUT_SECONDS: int = 60
+    DOWNLOAD_TIMEOUT_SECONDS: int = 600
+    INFO_TIMEOUT_SECONDS: int = 120
+    DOWNLOAD_ORPHAN_MAX_AGE_SECONDS: int = 1800
+    MIN_FREE_DISK_MB: int = 256
     FILE_URL_TTL_SECONDS: int = 300
     MAX_CONCURRENT_DOWNLOADS: int = 10
 

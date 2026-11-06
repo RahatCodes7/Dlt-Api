@@ -10,6 +10,7 @@ adding Redis or another database round-trip.
 import json
 import os
 import re
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -98,4 +99,49 @@ def cleanup_expired_tokens() -> int:
                 pass
         record.unlink(missing_ok=True)
         removed += 1
+    return removed
+
+
+def _active_paths() -> set[str]:
+    paths: set[str] = set()
+    for record in TOKEN_DIR.glob("*.json"):
+        try:
+            data = json.loads(record.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        file_path = data.get("path")
+        if file_path:
+            paths.add(os.path.abspath(str(file_path)))
+    return paths
+
+
+def cleanup_orphan_files(max_age_seconds: int = 3600) -> int:
+    """Remove download files that no live token references and are old.
+
+    A worker killed mid-download (or a client that never fetches its file) can
+    leave large files behind. On small ephemeral disks that eventually makes
+    every new download fail, so sweep them up on a short interval.
+    """
+    removed = 0
+    cutoff = time.time() - max(60, max_age_seconds)
+    active = _active_paths()
+    for entry in DOWNLOAD_DIR.iterdir():
+        try:
+            if entry.is_dir():
+                if entry.name == ".tokens" or entry.stat().st_mtime > cutoff:
+                    continue
+                # Temporary workspace left behind by a killed worker.
+                shutil.rmtree(entry, ignore_errors=True)
+                removed += 1
+                continue
+            if entry.name.startswith("."):
+                continue
+            if entry.stat().st_mtime > cutoff:
+                continue
+            if str(entry.resolve()) in active:
+                continue
+            entry.unlink()
+            removed += 1
+        except OSError:
+            continue
     return removed

@@ -22,7 +22,7 @@ from app.proxies import proxy_to_yt_dlp_format
 
 log = logging.getLogger("dlt.platform")
 
-DOWNLOAD_DIR = Path("downloads")
+DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", "downloads")).resolve()
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -51,12 +51,13 @@ class YtDlpEngine(PlatformEngine):
         self,
         platform: str,
         url_patterns: list,
-        timeout: int = 60,
+        timeout: int = settings.DOWNLOAD_TIMEOUT_SECONDS,
         proxy_rotator=None,
     ):
         self.platform = platform
         self.url_patterns = url_patterns
         self.timeout = timeout
+        self.info_timeout = min(timeout, settings.INFO_TIMEOUT_SECONDS)
         self.proxy_rotator = proxy_rotator
 
     def matches(self, url: str) -> bool:
@@ -79,6 +80,7 @@ class YtDlpEngine(PlatformEngine):
             opts["ffmpeg_location"] = FFMPEG_PATH
         if download:
             opts["outtmpl"] = os.path.join(tempfile.gettempdir(), "dlt_%(id)s.%(ext)s")
+            opts["concurrent_fragment_downloads"] = 4
             # A playlist would drop several files into the temp dir and make
             # "the downloaded file" ambiguous, so always take a single item.
             opts["noplaylist"] = True
@@ -135,7 +137,7 @@ class YtDlpEngine(PlatformEngine):
         self, url: str, format_id: Optional[str] = None, proxy: Optional[str] = None
     ) -> Tuple[Optional[str], Optional[dict], Optional[str]]:
         try:
-            with tempfile.TemporaryDirectory() as tmpdir:
+            with tempfile.TemporaryDirectory(dir=DOWNLOAD_DIR, prefix=".tmp-") as tmpdir:
                 opts = self._ydl_opts(download=True, format_id=format_id, proxy=proxy)
                 opts["outtmpl"] = os.path.join(tmpdir, "video.%(ext)s")
                 with yt_dlp.YoutubeDL(opts) as ydl:
@@ -190,10 +192,10 @@ class YtDlpEngine(PlatformEngine):
             try:
                 info, error = await asyncio.wait_for(
                     asyncio.to_thread(self._run_extract_info, url, proxy_url),
-                    timeout=self.timeout,
+                    timeout=self.info_timeout,
                 )
             except asyncio.TimeoutError:
-                info, error = None, f"Timed out after {self.timeout}s"
+                info, error = None, f"Timed out after {self.info_timeout}s"
             except asyncio.CancelledError:
                 raise
 

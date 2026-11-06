@@ -1,7 +1,9 @@
 import asyncio
 import json
+import logging
 import os
 import secrets
+import shutil
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -40,9 +42,16 @@ from app.auth import (
 from app.config import settings
 from app.database import AsyncSessionLocal, Base, engine, get_session
 from app.email import email_service
-from app.file_store import consume_file_token, create_file_token, resolve_file_token
+from app.file_store import (
+    cleanup_expired_tokens,
+    cleanup_orphan_files,
+    consume_file_token,
+    create_file_token,
+    resolve_file_token,
+)
 from app.models import ApiKey, Plan, Proxy, Subscription, Transaction, UsageLog, User
 from app.platforms import build_platform_engines, get_engine, PLATFORM_ENGINES
+from app.platforms.base import DOWNLOAD_DIR
 from app.quota import get_quota, increment_usage, rate_limit_check
 from app.schemas import (
     APIResponse,
@@ -62,6 +71,8 @@ from app.schemas import (
     ResetPasswordRequest,
 )
 from app.tasks import run_cleanup
+
+log = logging.getLogger("dlt.api")
 
 
 @asynccontextmanager
@@ -304,6 +315,18 @@ async def _validation_exception_handler(request: Request, exc: RequestValidation
         code=code,
         message=message,
         status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    log.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return _error_response(
+        platform=_platform_from_path(request.url.path),
+        request_id=_request_id(),
+        code="INTERNAL_ERROR",
+        message="Unexpected server error. Please retry.",
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     )
 
 
@@ -1094,6 +1117,28 @@ async def platform_download(
             headers={"Retry-After": "60"},
         )
 
+    # Reclaim disk from expired tokens and abandoned files before a new
+    # download, otherwise a small ephemeral disk fills up and every request
+    # fails with an opaque 500.
+    try:
+        cleanup_expired_tokens()
+        cleanup_orphan_files(settings.DOWNLOAD_ORPHAN_MAX_AGE_SECONDS)
+    except OSError:
+        log.warning("Download cleanup failed", exc_info=True)
+
+    try:
+        free_mb = shutil.disk_usage(DOWNLOAD_DIR).free // (1024 * 1024)
+    except OSError:
+        free_mb = None
+    if free_mb is not None and free_mb < settings.MIN_FREE_DISK_MB:
+        return _error_response(
+            platform=platform,
+            request_id=rid,
+            code="INSUFFICIENT_STORAGE",
+            message="Not enough disk space on the server. Please try a lower quality.",
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+        )
+
     # Explicit format id wins, then requested quality, then the legacy
     # ``format`` field ("mp4"/"mp3"/"720p"/...).
     selected_format = body.format_id or body.quality or body.format
@@ -1119,7 +1164,21 @@ async def platform_download(
             file_size = None
     await _record_usage(session, user, platform, str(body.url), True, file_size=file_size)
 
-    file_token = create_file_token(file_path, settings.FILE_URL_TTL_SECONDS)
+    try:
+        file_token = create_file_token(file_path, settings.FILE_URL_TTL_SECONDS)
+    except OSError:
+        log.exception("Could not persist download token for %s", file_path)
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+        return _error_response(
+            platform=platform,
+            request_id=rid,
+            code="INTERNAL_ERROR",
+            message="Could not store the downloaded file. Please retry.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     download_url = f"/v1/dlt/files/{file_token}"
 
     data = {

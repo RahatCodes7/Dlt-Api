@@ -70,3 +70,17 @@ uvicorn app.main:app --reload --port 8000
 
 ## Deploy (Render)
 Connect this repo to Render; it uses `render.yaml`. Set `DATABASE_URL` and `REDIS_URL` env vars.
+
+Download requests are synchronous and can run for several minutes. Keep the
+worker timeout above the download timeout:
+
+- `DOWNLOAD_TIMEOUT_SECONDS` (default `600`) — max time for one download.
+- `INFO_TIMEOUT_SECONDS` (default `120`) — max time for metadata extraction.
+- `GUNICORN_TIMEOUT` (default `1200`) — must exceed `DOWNLOAD_TIMEOUT_SECONDS`.
+- `MIN_FREE_DISK_MB` (default `256`) — requests fail fast with `507` when the disk is below this.
+- `DOWNLOAD_ORPHAN_MAX_AGE_SECONDS` (default `1800`) — abandoned files older
+  than this are removed by the background cleanup (runs every 5 minutes).
+
+Make sure Render's Start Command runs `gunicorn -c gunicorn.conf.py app.main:app`
+(or otherwise passes `--timeout`), because a plain `gunicorn app.main:app`
+falls back to a 30s timeout and kills large downloads.
