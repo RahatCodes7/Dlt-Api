@@ -49,7 +49,7 @@ from app.file_store import (
     create_file_token,
     resolve_file_token,
 )
-from app.models import ApiKey, Plan, Proxy, Subscription, Transaction, UsageLog, User
+from app.models import ApiKey, Plan, Proxy, Subscription, SystemSetting, Transaction, UsageLog, User
 from app.platforms import build_platform_engines, get_engine, PLATFORM_ENGINES
 from app.platforms.base import DOWNLOAD_DIR
 from app.quota import get_quota, increment_usage, rate_limit_check
@@ -69,6 +69,9 @@ from app.schemas import (
     QuotaOut,
     RegisterRequest,
     ResetPasswordRequest,
+    SystemSettingOut,
+    SystemSettingUpdate,
+    TransactionOut,
 )
 from app.tasks import run_cleanup
 
@@ -1316,6 +1319,124 @@ async def health():
 async def list_plans(session: AsyncSession = Depends(get_session)):
     result = await session.execute(select(Plan).where(Plan.active == True))  # noqa: E712
     return result.scalars().all()
+
+
+# ============================================================================
+# API CONFIGURATION (System Settings)
+# ============================================================================
+
+@app.get("/v1/session/account/settings", response_model=list[SystemSettingOut])
+async def list_settings(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(SystemSetting).order_by(SystemSetting.key))
+    return result.scalars().all()
+
+
+@app.post("/v1/session/account/settings", response_model=SystemSettingOut)
+async def upsert_setting(
+    body: SystemSettingUpdate,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    result = await session.execute(
+        select(SystemSetting).where(SystemSetting.key == body.key)
+    )
+    setting = result.scalar_one_or_none()
+    if setting:
+        setting.value = body.value
+    else:
+        setting = SystemSetting(key=body.key, value=body.value)
+        session.add(setting)
+    await session.commit()
+    await session.refresh(setting)
+    return setting
+
+
+# ============================================================================
+# TRANSACTIONS
+# ============================================================================
+
+@app.get("/v1/session/account/transactions", response_model=list[TransactionOut])
+async def list_transactions(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+    limit: int = 50,
+    offset: int = 0,
+):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    result = await session.execute(
+        select(Transaction)
+        .where(Transaction.user_id == user.id)
+        .order_by(Transaction.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return result.scalars().all()
+
+
+# ============================================================================
+# INVOICES (generated from completed transactions)
+# ============================================================================
+
+@app.get("/v1/session/account/invoices")
+async def list_invoices(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(Transaction)
+        .where(Transaction.user_id == user.id, Transaction.status == "completed")
+        .order_by(Transaction.created_at.desc())
+        .limit(100)
+    )
+    transactions = result.scalars().all()
+    return [
+        {
+            "id": f"inv-{tx.id}",
+            "transaction_id": tx.id,
+            "amount": float(tx.amount),
+            "currency": tx.currency,
+            "method": tx.method,
+            "status": tx.status,
+            "ref": tx.ref,
+            "created_at": tx.created_at.isoformat() if tx.created_at else None,
+            "pdf_url": f"/v1/session/account/invoices/{tx.id}",
+        }
+        for tx in transactions
+    ]
+
+
+@app.get("/v1/session/account/invoices/{transaction_id}")
+async def get_invoice(
+    transaction_id: int,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(Transaction).where(
+            Transaction.id == transaction_id, Transaction.user_id == user.id
+        )
+    )
+    tx = result.scalar_one_or_none()
+    if tx is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+    return {
+        "id": f"inv-{tx.id}",
+        "transaction_id": tx.id,
+        "amount": float(tx.amount),
+        "currency": tx.currency,
+        "method": tx.method,
+        "status": tx.status,
+        "ref": tx.ref,
+        "created_at": tx.created_at.isoformat() if tx.created_at else None,
+        "user_email": user.email,
+        "user_name": user.name,
+    }
 
 
 # ============================================================================

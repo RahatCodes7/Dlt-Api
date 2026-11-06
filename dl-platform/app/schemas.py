@@ -139,3 +139,29 @@ class SubscriptionOut(BaseModel):
     auto_renew: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ---- System settings (API Configuration) ----
+class SystemSettingOut(BaseModel):
+    key: str
+    value: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SystemSettingUpdate(BaseModel):
+    key: str
+    value: str
+
+
+# ---- Transactions ----
+class TransactionOut(BaseModel):
+    id: int
+    amount: float
+    currency: str
+    method: str
+    status: str
+    ref: Optional[str]
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
