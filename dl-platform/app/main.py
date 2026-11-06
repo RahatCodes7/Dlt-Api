@@ -64,12 +64,15 @@ from app.schemas import (
     ForgotPasswordRequest,
     InfoRequest,
     LoginRequest,
+    PlanCreate,
     PlanOut,
+    PlanUpdate,
     ProfileUpdate,
     ProxyCreate,
     QuotaOut,
     RegisterRequest,
     ResetPasswordRequest,
+    SubscriptionAdminOut,
     SystemSettingOut,
     SystemSettingUpdate,
     TransactionOut,
@@ -1468,6 +1471,114 @@ async def get_invoice(
         "user_email": user.email,
         "user_name": user.name,
     }
+
+
+# ============================================================================
+# ADMIN PLANS & SUBSCRIPTIONS
+# ============================================================================
+
+@app.get("/v1/admin/plans", response_model=list[PlanOut])
+async def admin_list_plans(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    result = await session.execute(select(Plan).order_by(Plan.id))
+    return result.scalars().all()
+
+
+@app.post("/v1/admin/plans", response_model=PlanOut, status_code=status.HTTP_201_CREATED)
+async def admin_create_plan(
+    body: PlanCreate,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    plan = Plan(
+        name=body.name,
+        monthly_requests=body.monthly_requests,
+        price=body.price,
+        active=body.active,
+    )
+    session.add(plan)
+    await session.commit()
+    await session.refresh(plan)
+    return plan
+
+
+@app.put("/v1/admin/plans/{plan_id}", response_model=PlanOut)
+async def admin_update_plan(
+    plan_id: int,
+    body: PlanUpdate,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    result = await session.execute(select(Plan).where(Plan.id == plan_id))
+    plan = result.scalar_one_or_none()
+    if plan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
+    if body.name is not None:
+        plan.name = body.name
+    if body.monthly_requests is not None:
+        plan.monthly_requests = body.monthly_requests
+    if body.price is not None:
+        plan.price = body.price
+    if body.active is not None:
+        plan.active = body.active
+    await session.commit()
+    await session.refresh(plan)
+    return plan
+
+
+@app.delete("/v1/admin/plans/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_delete_plan(
+    plan_id: int,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    result = await session.execute(select(Plan).where(Plan.id == plan_id))
+    plan = result.scalar_one_or_none()
+    if plan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
+    await session.delete(plan)
+    await session.commit()
+    return None
+
+
+@app.get("/v1/admin/subscriptions", response_model=list[SubscriptionAdminOut])
+async def admin_list_subscriptions(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    result = await session.execute(
+        select(Subscription).order_by(Subscription.created_at.desc())
+    )
+    subs = result.scalars().all()
+    out = []
+    for sub in subs:
+        user_result = await session.execute(
+            select(User).where(User.id == sub.user_id)
+        )
+        sub_user = user_result.scalar_one_or_none()
+        out.append({
+            "id": sub.id,
+            "user_id": sub.user_id,
+            "user_email": sub_user.email if sub_user else "unknown",
+            "plan": sub.plan,
+            "status": sub.status,
+            "start": sub.start,
+            "end": sub.end,
+            "auto_renew": sub.auto_renew,
+        })
+    return out
 
 
 # ============================================================================

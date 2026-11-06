@@ -165,3 +165,32 @@ class TransactionOut(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ---- Admin: plans ----
+class PlanCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    monthly_requests: int = Field(default=0, ge=0)
+    price: Optional[float] = Field(default=None, ge=0)
+    active: bool = True
+
+
+class PlanUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    monthly_requests: Optional[int] = Field(default=None, ge=0)
+    price: Optional[float] = Field(default=None, ge=0)
+    active: Optional[bool] = None
+
+
+# ---- Admin: subscriptions ----
+class SubscriptionAdminOut(BaseModel):
+    id: int
+    user_id: int
+    user_email: str
+    plan: PlanOut
+    status: str
+    start: datetime
+    end: Optional[datetime]
+    auto_renew: bool
+
+    model_config = ConfigDict(from_attributes=True)
