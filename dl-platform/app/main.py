@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import httpx
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -1547,6 +1547,12 @@ async def admin_delete_plan(
     plan = result.scalar_one_or_none()
     if plan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
+    # Unassign users from this plan first (nullable FK)
+    await session.execute(
+        update(User).where(User.plan_id == plan_id).values(plan_id=None)
+    )
+    # Delete subscriptions referencing this plan
+    await session.execute(delete(Subscription).where(Subscription.plan_id == plan_id))
     await session.delete(plan)
     await session.commit()
     return None
