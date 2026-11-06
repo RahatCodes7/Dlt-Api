@@ -20,6 +20,7 @@ from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import httpx
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1030,6 +1031,36 @@ async def session_subscription(
         if sub
         else None,
         "transactions": transactions,
+    }
+
+
+class SubscriptionChange(BaseModel):
+    plan_id: int
+
+
+@app.patch("/v1/session/account/subscription")
+async def session_change_subscription(
+    body: SubscriptionChange,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(Plan).where(Plan.id == body.plan_id, Plan.active == True))  # noqa: E712
+    plan = result.scalar_one_or_none()
+    if plan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found or inactive")
+
+    user.plan_id = plan.id
+    await session.commit()
+    await session.refresh(user)
+
+    return {
+        "plan": {
+            "id": plan.id,
+            "name": plan.name,
+            "monthly_requests": plan.monthly_requests,
+            "price": float(plan.price) if plan.price is not None else None,
+        },
+        "message": f"Plan changed to {plan.name}",
     }
 
 
