@@ -20,6 +20,8 @@ export default function AdminPlansEditPage() {
   const [error, setError] = React.useState("");
   const [editing, setEditing] = React.useState<number | null>(null);
   const [edits, setEdits] = React.useState<Record<number, Partial<Plan>>>({});
+  const [deleting, setDeleting] = React.useState<number | null>(null);
+  const [confirmDelete, setConfirmDelete] = React.useState<number | null>(null);
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -62,13 +64,20 @@ export default function AdminPlansEditPage() {
     }
   };
 
+  const confirmDeletePlan = (id: number) => setConfirmDelete(id);
+  const cancelDelete = () => setConfirmDelete(null);
+
   const deletePlan = async (id: number) => {
-    if (!window.confirm("Delete this plan?")) return;
+    setDeleting(id);
+    setConfirmDelete(null);
     try {
       await apiFetch(`/v1/admin/plans/${id}`, { method: "DELETE" });
-      load();
+      setPlans((prev) => prev.filter((p) => p.id !== id));
+      if (editing === id) setEditing(null);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "Could not delete plan");
+    } finally {
+      setDeleting(null);
     }
   };
 
@@ -220,12 +229,32 @@ export default function AdminPlansEditPage() {
                           >
                             Edit
                           </button>
-                          <button
-                            onClick={() => deletePlan(plan.id)}
-                            className="text-xs font-semibold text-destructive hover:underline"
-                          >
-                            Delete
-                          </button>
+                          {confirmDelete === plan.id ? (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => deletePlan(plan.id)}
+                                className="text-xs font-bold text-destructive"
+                              >
+                                Delete
+                              </button>
+                              <button
+                                onClick={cancelDelete}
+                                className="text-xs font-semibold text-muted-foreground hover:underline"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => confirmDeletePlan(plan.id)}
+                              disabled={deleting === plan.id}
+                              className={`text-xs font-semibold ${
+                                deleting === plan.id ? "text-muted-foreground" : "text-destructive"
+                              } hover:underline`}
+                            >
+                              {deleting === plan.id ? "Deleting…" : "Delete"}
+                            </button>
+                          )}
                         </div>
                       )}
                     </td>
