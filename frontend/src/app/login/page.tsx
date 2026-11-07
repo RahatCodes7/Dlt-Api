@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertCircle, ArrowRight, Eye, EyeOff, Loader2, Lock, Mail } from "lucide-react";
+import { AlertCircle, ArrowRight, Eye, EyeOff, Loader2, Lock, Mail, ShieldCheck } from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
 import { Input } from "@/components/ui/input";
 import { API_BASE } from "@/lib/api";
@@ -25,6 +25,8 @@ export default function LoginPage() {
   const [password, setPassword] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
   const [remember, setRemember] = React.useState(true);
+  const [otp, setOtp] = React.useState("");
+  const [requiresOtp, setRequiresOtp] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
 
@@ -44,11 +46,27 @@ export default function LoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email, password, remember }),
+        body: JSON.stringify({
+          email,
+          password,
+          remember,
+          ...(requiresOtp && otp ? { otp } : {}),
+        }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setError(data.detail || "Login failed. Check your email and password.");
+        const code = data.error?.code ?? data.detail;
+        if (code === "TWO_FACTOR_REQUIRED") {
+          setRequiresOtp(true);
+          setError("Enter the 6-digit code from your authenticator app.");
+          return;
+        }
+        if (code === "INVALID_OTP") {
+          setRequiresOtp(true);
+          setError("That code is invalid or expired. Try again.");
+          return;
+        }
+        setError(data.error?.message || data.detail || "Login failed. Check your email and password.");
         return;
       }
       router.refresh();
@@ -139,6 +157,30 @@ export default function LoginPage() {
               </button>
             </div>
           </div>
+
+          {requiresOtp && (
+            <div className="space-y-1.5">
+              <label htmlFor="otp" className="text-sm font-medium">
+                Authenticator code
+              </label>
+              <div className="relative">
+                <ShieldCheck className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="otp"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={otp}
+                  onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                  placeholder="000000"
+                  maxLength={6}
+                  required
+                  autoFocus
+                  className="pl-10 font-mono tracking-[0.3em]"
+                />
+              </div>
+            </div>
+          )}
 
           <label className="flex items-center gap-2 text-sm text-muted-foreground">
             <input

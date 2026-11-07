@@ -1,16 +1,20 @@
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
 import secrets
 import shutil
+import struct
 import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import Depends, FastAPI, HTTPException, status, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -51,12 +55,28 @@ from app.file_store import (
     create_file_token,
     resolve_file_token,
 )
-from app.models import ApiKey, Plan, Proxy, Subscription, SystemSetting, Transaction, UsageLog, User
+from app.models import (
+    ApiKey,
+    Notification,
+    Plan,
+    Proxy,
+    Subscription,
+    SupportTicket,
+    SystemSetting,
+    TicketMessage,
+    Transaction,
+    UsageLog,
+    User,
+    UserSession,
+    UserSetting,
+)
 from app.platforms import build_platform_engines, get_engine, PLATFORM_ENGINES
 from app.platforms.base import DOWNLOAD_DIR
 from app.quota import get_quota, increment_usage, rate_limit_check
 from app.schemas import (
     APIResponse,
+    AccountDeleteRequest,
+    ApiConfigurationUpdate,
     ApiKeyCreate,
     ApiKeyCreatedOut,
     ApiKeyOut,
@@ -65,6 +85,9 @@ from app.schemas import (
     ForgotPasswordRequest,
     InfoRequest,
     LoginRequest,
+    NotificationOut,
+    NotificationPreferencesUpdate,
+    PasswordChangeRequest,
     PlanCreate,
     PlanOut,
     PlanUpdate,
@@ -74,9 +97,16 @@ from app.schemas import (
     RegisterRequest,
     ResetPasswordRequest,
     SubscriptionAdminOut,
+    SupportTicketCreate,
+    SupportTicketOut,
     SystemSettingOut,
     SystemSettingUpdate,
+    TicketMessageCreate,
+    TicketMessageOut,
+    TicketStatusUpdate,
     TransactionOut,
+    TwoFactorCodeRequest,
+    WorkspacePreferencesUpdate,
 )
 from app.tasks import run_cleanup
 
@@ -350,6 +380,192 @@ def _user_payload(user: User) -> dict:
     }
 
 
+# ---- Per-user settings helpers -------------------------------------------
+
+DEFAULT_API_CONFIGURATION = {
+    "default_format": "mp4",
+    "default_quality": "best",
+    "default_platform": "",
+    "timeout_seconds": 120,
+    "include_metadata": True,
+    "retry_failed": True,
+}
+
+DEFAULT_WORKSPACE_PREFERENCES = {
+    "timezone": "UTC",
+    "locale": "en-US",
+    "date_format": "MMM d, yyyy",
+}
+
+DEFAULT_NOTIFICATION_PREFERENCES = {
+    "email_quota": True,
+    "email_incidents": True,
+    "email_product": False,
+}
+
+
+def _parse_bool(value: Optional[str], fallback: bool = False) -> bool:
+    if value is None:
+        return fallback
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _user_settings_map(session: AsyncSession, user_id: int) -> dict:
+    result = await session.execute(
+        select(UserSetting).where(UserSetting.user_id == user_id)
+    )
+    return {setting.key: setting.value for setting in result.scalars().all()}
+
+
+async def _set_user_settings(
+    session: AsyncSession, user_id: int, values: dict
+) -> None:
+    for key, value in values.items():
+        result = await session.execute(
+            select(UserSetting).where(
+                UserSetting.user_id == user_id, UserSetting.key == key
+            )
+        )
+        setting = result.scalar_one_or_none()
+        if setting is not None:
+            setting.value = str(value)
+        else:
+            session.add(UserSetting(user_id=user_id, key=key, value=str(value)))
+    await session.commit()
+
+
+def _api_configuration_payload(stored: dict) -> dict:
+    return {
+        "default_format": stored.get(
+            "api.default_format", DEFAULT_API_CONFIGURATION["default_format"]
+        ),
+        "default_quality": stored.get(
+            "api.default_quality", DEFAULT_API_CONFIGURATION["default_quality"]
+        ),
+        "default_platform": stored.get("api.default_platform", "") or None,
+        "timeout_seconds": int(
+            stored.get("api.timeout_seconds", DEFAULT_API_CONFIGURATION["timeout_seconds"])
+        ),
+        "include_metadata": _parse_bool(
+            stored.get("api.include_metadata"), DEFAULT_API_CONFIGURATION["include_metadata"]
+        ),
+        "retry_failed": _parse_bool(
+            stored.get("api.retry_failed"), DEFAULT_API_CONFIGURATION["retry_failed"]
+        ),
+    }
+
+
+def _workspace_payload(stored: dict) -> dict:
+    return {
+        "timezone": stored.get(
+            "workspace.timezone", DEFAULT_WORKSPACE_PREFERENCES["timezone"]
+        ),
+        "locale": stored.get("workspace.locale", DEFAULT_WORKSPACE_PREFERENCES["locale"]),
+        "date_format": stored.get(
+            "workspace.date_format", DEFAULT_WORKSPACE_PREFERENCES["date_format"]
+        ),
+    }
+
+
+def _notification_preferences_payload(stored: dict) -> dict:
+    return {
+        "email_quota": _parse_bool(
+            stored.get("notifications.email_quota"),
+            DEFAULT_NOTIFICATION_PREFERENCES["email_quota"],
+        ),
+        "email_incidents": _parse_bool(
+            stored.get("notifications.email_incidents"),
+            DEFAULT_NOTIFICATION_PREFERENCES["email_incidents"],
+        ),
+        "email_product": _parse_bool(
+            stored.get("notifications.email_product"),
+            DEFAULT_NOTIFICATION_PREFERENCES["email_product"],
+        ),
+    }
+
+
+# ---- TOTP (standard library only) ----------------------------------------
+
+def _generate_totp_secret() -> str:
+    return base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+
+
+def _totp_codename(secret: str, counter: int) -> str:
+    padded = secret + "=" * (-len(secret) % 8)
+    key = base64.b32decode(padded, casefold=True)
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    binary = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return f"{binary % 1000000:06d}"
+
+
+def _verify_totp(secret: str, code: str, window: int = 1) -> bool:
+    candidate = (code or "").strip().replace(" ", "")
+    if not candidate.isdigit() or not secret:
+        return False
+    counter = int(time.time()) // 30
+    return any(
+        hmac.compare_digest(_totp_codename(secret, counter + offset), candidate)
+        for offset in range(-window, window + 1)
+    )
+
+
+def _totp_uri(secret: str, email: str) -> str:
+    label = quote(f"DLT API:{email}")
+    query = urlencode(
+        {"secret": secret, "issuer": "DLT API", "digits": 6, "period": 30}
+    )
+    return f"otpauth://totp/{label}?{query}"
+
+
+async def _two_factor_state(session: AsyncSession, user_id: int) -> tuple[bool, Optional[str]]:
+    stored = await _user_settings_map(session, user_id)
+    secret = stored.get("security.totp_secret")
+    enabled = _parse_bool(stored.get("security.totp_enabled")) and bool(secret)
+    return enabled, secret
+
+
+# ---- Browser session tracking --------------------------------------------
+
+def _set_session_cookie(response: Response, session_id: int) -> None:
+    secure, samesite = cookie_policy()
+    response.set_cookie(
+        key="sid",
+        value=str(session_id),
+        httponly=True,
+        secure=secure,
+        samesite=samesite,
+        max_age=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        path="/",
+    )
+
+
+async def _start_user_session(
+    request: Request, response: Response, user: User, session: AsyncSession
+) -> UserSession:
+    record = UserSession(
+        user_id=user.id,
+        ip_address=(request.client.host if request.client else None),
+        user_agent=(request.headers.get("user-agent") or "")[:255] or None,
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    _set_session_cookie(response, record.id)
+    return record
+
+
+def _session_payload(record: UserSession, current_id: Optional[str]) -> dict:
+    return {
+        "id": record.id,
+        "ip_address": record.ip_address,
+        "user_agent": record.user_agent,
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+        "last_seen": record.last_seen.isoformat() if record.last_seen else None,
+        "current": str(record.id) == (current_id or ""),
+    }
+
+
 async def _account_quota(user: User, session: AsyncSession) -> dict:
     return await get_quota(user.id, session)
 
@@ -557,9 +773,29 @@ async def login(
     if not user.email_verified:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email not verified")
 
+    two_factor_enabled, totp_secret = await _two_factor_state(session, user.id)
+    if two_factor_enabled:
+        if not body.otp:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "code": "TWO_FACTOR_REQUIRED",
+                    "message": "Two-factor authentication required",
+                },
+            )
+        if not totp_secret or not _verify_totp(totp_secret, body.otp):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "code": "INVALID_OTP",
+                    "message": "Invalid or expired two-factor code",
+                },
+            )
+
     access_token = create_access_token(user.id, user.email)
     refresh_token = create_refresh_token(user.id)
     set_auth_cookies(response, access_token, refresh_token)
+    await _start_user_session(request, response, user, session)
 
     return {
         "user": {
@@ -574,8 +810,22 @@ async def login(
 
 
 @app.post("/v1/auth/logout")
-async def logout(response: Response):
+async def logout(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    sid = request.cookies.get("sid")
+    if sid and sid.isdigit():
+        result = await session.execute(
+            select(UserSession).where(UserSession.id == int(sid))
+        )
+        record = result.scalar_one_or_none()
+        if record is not None:
+            record.revoked = True
+            await session.commit()
     clear_auth_cookies(response)
+    response.delete_cookie("sid", path="/")
     return {"message": "Logged out"}
 
 
@@ -602,6 +852,16 @@ async def refresh_token(
     access_token = create_access_token(user.id, user.email)
     new_refresh = create_refresh_token(user.id)
     set_auth_cookies(response, access_token, new_refresh)
+
+    sid = request.cookies.get("sid")
+    if sid and sid.isdigit():
+        session_result = await session.execute(
+            select(UserSession).where(UserSession.id == int(sid))
+        )
+        record = session_result.scalar_one_or_none()
+        if record is not None:
+            record.last_seen = datetime.now(timezone.utc)
+            await session.commit()
 
     return {"message": "Token refreshed"}
 
@@ -847,6 +1107,7 @@ async def google_callback(
         create_access_token(user.id, user.email),
         create_refresh_token(user.id),
     )
+    await _start_user_session(request, response, user, session)
     response.delete_cookie("oauth_state", path="/")
     return response
 
@@ -1472,6 +1733,629 @@ async def get_invoice(
         "user_email": user.email,
         "user_name": user.name,
     }
+
+
+# ============================================================================
+# ACCOUNT: API CONFIGURATION
+# ============================================================================
+
+@app.get("/v1/session/account/api-configuration")
+async def get_api_configuration(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    stored = await _user_settings_map(session, user.id)
+    return _api_configuration_payload(stored)
+
+
+@app.put("/v1/session/account/api-configuration")
+async def update_api_configuration(
+    body: ApiConfigurationUpdate,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    await _set_user_settings(
+        session,
+        user.id,
+        {
+            "api.default_format": body.default_format.strip().lower(),
+            "api.default_quality": body.default_quality.strip().lower(),
+            "api.default_platform": (body.default_platform or "").strip().lower(),
+            "api.timeout_seconds": body.timeout_seconds,
+            "api.include_metadata": "true" if body.include_metadata else "false",
+            "api.retry_failed": "true" if body.retry_failed else "false",
+        },
+    )
+    stored = await _user_settings_map(session, user.id)
+    return _api_configuration_payload(stored)
+
+
+# ============================================================================
+# ACCOUNT: DOCUMENTATION
+# ============================================================================
+
+@app.get("/v1/session/account/documentation")
+async def account_documentation(user: User = Depends(require_auth_user)):
+    platform_copy = {
+        "youtube": "Video metadata, format selection, and high-quality downloads.",
+        "instagram": "Posts, reels, and stories, with and without watermarks.",
+        "facebook": "Videos and reels in MP4, ready for your application.",
+        "tiktok": "No-watermark downloads with author and audio metadata.",
+    }
+    platform_guides = [
+        {
+            "id": slug,
+            "title": slug.capitalize(),
+            "description": platform_copy.get(slug, "Media info and downloads."),
+            "endpoints": [
+                {
+                    "method": "POST",
+                    "path": f"/v1/dlt/{slug}/info",
+                    "description": "Fetch metadata and available formats.",
+                },
+                {
+                    "method": "POST",
+                    "path": f"/v1/dlt/{slug}/download",
+                    "description": "Download media in the requested format.",
+                },
+            ],
+        }
+        for slug in PLATFORM_ENGINES
+    ]
+
+    return {
+        "base_url": settings.FRONTEND_URL.rstrip("/"),
+        "sections": [
+            {
+                "id": "authentication",
+                "title": "Authentication",
+                "summary": "Send your API key as a Bearer token on every request.",
+                "endpoints": [
+                    {
+                        "method": "HEADER",
+                        "path": "Authorization: Bearer dl_live_...",
+                        "description": "Keys are hashed at rest and shown once at creation.",
+                    }
+                ],
+            },
+            {
+                "id": "platforms",
+                "title": "Platform endpoints",
+                "summary": "Every platform shares the same request and response shape.",
+                "endpoints": [
+                    endpoint
+                    for guide in platform_guides
+                    for endpoint in guide["endpoints"]
+                ],
+                "guides": platform_guides,
+            },
+            {
+                "id": "account",
+                "title": "Account endpoints",
+                "summary": "Check quota and manage keys using your API key.",
+                "endpoints": [
+                    {
+                        "method": "GET",
+                        "path": "/v1/dlt/account/quota",
+                        "description": "Remaining requests for the current month.",
+                    },
+                    {
+                        "method": "GET",
+                        "path": "/v1/dlt/account/keys",
+                        "description": "List API keys attached to your account.",
+                    },
+                    {
+                        "method": "POST",
+                        "path": "/v1/dlt/account/keys",
+                        "description": "Create a new API key.",
+                    },
+                ],
+            },
+            {
+                "id": "errors",
+                "title": "Errors and limits",
+                "summary": "Stable machine-readable codes for every failure.",
+                "endpoints": [
+                    {
+                        "method": "ERROR",
+                        "path": "401 UNAUTHORIZED",
+                        "description": "Missing, invalid, or revoked API key.",
+                    },
+                    {
+                        "method": "ERROR",
+                        "path": "429 RATE_LIMITED",
+                        "description": "Too many requests in the current window.",
+                    },
+                    {
+                        "method": "ERROR",
+                        "path": "429 QUOTA_EXCEEDED",
+                        "description": "Monthly request allowance exhausted.",
+                    },
+                ],
+            },
+        ],
+    }
+
+
+# ============================================================================
+# ACCOUNT: API STATUS
+# ============================================================================
+
+@app.get("/v1/session/account/api-status")
+async def account_api_status(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    result = await session.execute(
+        select(UsageLog.product, UsageLog.status, func.count(UsageLog.id))
+        .where(UsageLog.created_at >= since)
+        .group_by(UsageLog.product, UsageLog.status)
+    )
+
+    counts: dict[str, dict[str, int]] = {}
+    for product, status_value, count in result.all():
+        bucket = counts.setdefault(product, {"total": 0, "errors": 0})
+        bucket["total"] += count
+        if status_value != "success":
+            bucket["errors"] += count
+
+    platforms = []
+    for slug in PLATFORM_ENGINES:
+        bucket = counts.get(slug, {"total": 0, "errors": 0})
+        total = bucket["total"]
+        errors = bucket["errors"]
+        success_rate = round(((total - errors) / total) * 100, 1) if total else None
+        if total == 0:
+            state = "operational"
+        elif success_rate is not None and success_rate < 70:
+            state = "degraded"
+        else:
+            state = "operational"
+        platforms.append(
+            {
+                "slug": slug,
+                "name": slug.capitalize(),
+                "status": state,
+                "requests_24h": total,
+                "errors_24h": errors,
+                "success_rate": success_rate,
+            }
+        )
+
+    degraded = [item for item in platforms if item["status"] != "operational"]
+    overall = "degraded" if degraded else "operational"
+    return {
+        "status": overall,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "platforms": platforms,
+    }
+
+
+# ============================================================================
+# ACCOUNT: SUPPORT TICKETS
+# ============================================================================
+
+def _ticket_payload(ticket: SupportTicket) -> dict:
+    return {
+        "id": ticket.id,
+        "subject": ticket.subject,
+        "priority": ticket.priority,
+        "status": ticket.status,
+        "created_at": ticket.created_at.isoformat() if ticket.created_at else None,
+        "updated_at": ticket.updated_at.isoformat() if ticket.updated_at else None,
+        "message_count": len(ticket.messages or []),
+    }
+
+
+async def _get_ticket(
+    ticket_id: int, user: User, session: AsyncSession
+) -> SupportTicket:
+    result = await session.execute(
+        select(SupportTicket).where(
+            SupportTicket.id == ticket_id, SupportTicket.user_id == user.id
+        )
+    )
+    ticket = result.scalar_one_or_none()
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+    return ticket
+
+
+@app.get("/v1/session/account/support-tickets")
+async def list_support_tickets(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(SupportTicket)
+        .where(SupportTicket.user_id == user.id)
+        .order_by(SupportTicket.updated_at.desc(), SupportTicket.id.desc())
+    )
+    return [_ticket_payload(ticket) for ticket in result.scalars().all()]
+
+
+@app.post("/v1/session/account/support-tickets", status_code=status.HTTP_201_CREATED)
+async def create_support_ticket(
+    body: SupportTicketCreate,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    priority = body.priority.strip().lower()
+    if priority not in {"low", "normal", "high", "urgent"}:
+        priority = "normal"
+    ticket = SupportTicket(
+        user_id=user.id,
+        subject=body.subject.strip(),
+        priority=priority,
+        status="open",
+        messages=[TicketMessage(author="user", body=body.message.strip())],
+    )
+    session.add(ticket)
+    await session.commit()
+    await session.refresh(ticket)
+    return _ticket_payload(ticket)
+
+
+@app.get("/v1/session/account/support-tickets/{ticket_id}")
+async def get_support_ticket(
+    ticket_id: int,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    ticket = await _get_ticket(ticket_id, user, session)
+    return {
+        **_ticket_payload(ticket),
+        "messages": [
+            {
+                "id": message.id,
+                "author": message.author,
+                "body": message.body,
+                "created_at": message.created_at.isoformat() if message.created_at else None,
+            }
+            for message in ticket.messages
+        ],
+    }
+
+
+@app.post(
+    "/v1/session/account/support-tickets/{ticket_id}/messages",
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_ticket_message(
+    ticket_id: int,
+    body: TicketMessageCreate,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    ticket = await _get_ticket(ticket_id, user, session)
+    if ticket.status == "closed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ticket is closed")
+    message = TicketMessage(ticket_id=ticket.id, author="user", body=body.body.strip())
+    ticket.updated_at = datetime.now(timezone.utc)
+    if ticket.status == "pending":
+        ticket.status = "open"
+    session.add(message)
+    await session.commit()
+    await session.refresh(message)
+    return {
+        "id": message.id,
+        "author": message.author,
+        "body": message.body,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+    }
+
+
+@app.patch("/v1/session/account/support-tickets/{ticket_id}")
+async def update_ticket_status(
+    ticket_id: int,
+    body: TicketStatusUpdate,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    ticket = await _get_ticket(ticket_id, user, session)
+    ticket.status = body.status
+    ticket.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    await session.refresh(ticket)
+    return _ticket_payload(ticket)
+
+
+# ============================================================================
+# ACCOUNT: NOTIFICATIONS
+# ============================================================================
+
+@app.get("/v1/session/account/notifications")
+async def list_notifications(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+    limit: int = 100,
+):
+    limit = max(1, min(limit, 200))
+    result = await session.execute(
+        select(Notification)
+        .where(Notification.user_id == user.id)
+        .order_by(Notification.id.desc())
+        .limit(limit)
+    )
+    notifications = result.scalars().all()
+    unread = await session.execute(
+        select(func.count(Notification.id)).where(
+            Notification.user_id == user.id, Notification.read == False  # noqa: E712
+        )
+    )
+    stored = await _user_settings_map(session, user.id)
+    return {
+        "items": [NotificationOut.model_validate(item).model_dump() for item in notifications],
+        "unread": unread.scalar_one(),
+        "preferences": _notification_preferences_payload(stored),
+    }
+
+
+@app.post("/v1/session/account/notifications/read-all")
+async def mark_all_notifications_read(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    await session.execute(
+        update(Notification)
+        .where(Notification.user_id == user.id, Notification.read == False)  # noqa: E712
+        .values(read=True)
+    )
+    await session.commit()
+    return {"message": "All notifications marked as read"}
+
+
+@app.post("/v1/session/account/notifications/{notification_id}/read")
+async def mark_notification_read(
+    notification_id: int,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(Notification).where(
+            Notification.id == notification_id, Notification.user_id == user.id
+        )
+    )
+    notification = result.scalar_one_or_none()
+    if notification is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
+    notification.read = True
+    await session.commit()
+    return NotificationOut.model_validate(notification).model_dump()
+
+
+@app.get("/v1/session/account/notification-preferences")
+async def get_notification_preferences(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    stored = await _user_settings_map(session, user.id)
+    return _notification_preferences_payload(stored)
+
+
+@app.put("/v1/session/account/notification-preferences")
+async def update_notification_preferences(
+    body: NotificationPreferencesUpdate,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    await _set_user_settings(
+        session,
+        user.id,
+        {
+            "notifications.email_quota": "true" if body.email_quota else "false",
+            "notifications.email_incidents": "true" if body.email_incidents else "false",
+            "notifications.email_product": "true" if body.email_product else "false",
+        },
+    )
+    stored = await _user_settings_map(session, user.id)
+    return _notification_preferences_payload(stored)
+
+
+# ============================================================================
+# ACCOUNT: SECURITY
+# ============================================================================
+
+@app.get("/v1/session/account/security")
+async def account_security(
+    request: Request,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    stored = await _user_settings_map(session, user.id)
+    result = await session.execute(
+        select(UserSession)
+        .where(UserSession.user_id == user.id, UserSession.revoked == False)  # noqa: E712
+        .order_by(UserSession.id.desc())
+    )
+    current_sid = request.cookies.get("sid")
+    sessions = [_session_payload(record, current_sid) for record in result.scalars().all()]
+    return {
+        "email": user.email,
+        "email_verified": user.email_verified,
+        "password_set": bool(user.password_hash),
+        "two_factor_enabled": _parse_bool(stored.get("security.totp_enabled"))
+        and bool(stored.get("security.totp_secret")),
+        "two_factor_pending": bool(stored.get("security.totp_pending")),
+        "sessions": sessions,
+        "current_session_id": current_sid,
+    }
+
+
+@app.post("/v1/session/account/security/password")
+async def change_password(
+    body: PasswordChangeRequest,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if not user.password_hash:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This account uses social sign-in and has no password",
+        )
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+    if len(body.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="New password must be at least 8 characters",
+        )
+    user.password_hash = hash_password(body.new_password)
+    await session.commit()
+    return {"message": "Password updated"}
+
+
+@app.post("/v1/session/account/security/2fa/setup")
+async def setup_two_factor(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    enabled, _ = await _two_factor_state(session, user.id)
+    if enabled:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Two-factor is already enabled")
+    secret = _generate_totp_secret()
+    await _set_user_settings(session, user.id, {"security.totp_pending": secret})
+    return {"secret": secret, "otpauth_uri": _totp_uri(secret, user.email)}
+
+
+@app.post("/v1/session/account/security/2fa/enable")
+async def enable_two_factor(
+    body: TwoFactorCodeRequest,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    stored = await _user_settings_map(session, user.id)
+    secret = stored.get("security.totp_pending")
+    if not secret:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Start setup first")
+    if not _verify_totp(secret, body.code):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid verification code")
+    await _set_user_settings(
+        session,
+        user.id,
+        {
+            "security.totp_secret": secret,
+            "security.totp_enabled": "true",
+            "security.totp_pending": "",
+        },
+    )
+    return {"message": "Two-factor authentication enabled", "enabled": True}
+
+
+@app.post("/v1/session/account/security/2fa/disable")
+async def disable_two_factor(
+    body: TwoFactorCodeRequest,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    enabled, secret = await _two_factor_state(session, user.id)
+    if not enabled or not secret:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Two-factor is not enabled")
+    if not _verify_totp(secret, body.code):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid verification code")
+    await _set_user_settings(
+        session,
+        user.id,
+        {
+            "security.totp_secret": "",
+            "security.totp_enabled": "false",
+            "security.totp_pending": "",
+        },
+    )
+    return {"message": "Two-factor authentication disabled", "enabled": False}
+
+
+@app.delete("/v1/session/account/security/sessions/{session_id}")
+async def revoke_user_session(
+    session_id: int,
+    request: Request,
+    response: Response,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(UserSession).where(
+            UserSession.id == session_id, UserSession.user_id == user.id
+        )
+    )
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    record.revoked = True
+    await session.commit()
+    if request.cookies.get("sid") == str(session_id):
+        clear_auth_cookies(response)
+        response.delete_cookie("sid", path="/")
+    return {"message": "Session revoked"}
+
+
+# ============================================================================
+# ACCOUNT: WORKSPACE PREFERENCES & DANGER ZONE
+# ============================================================================
+
+@app.get("/v1/session/account/preferences")
+async def get_account_preferences(
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    stored = await _user_settings_map(session, user.id)
+    return {
+        "workspace": _workspace_payload(stored),
+        "notifications": _notification_preferences_payload(stored),
+        "account": {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+            "plan": user.plan.name if user.plan else None,
+            "role": user.role,
+        },
+    }
+
+
+@app.put("/v1/session/account/preferences")
+async def update_account_preferences(
+    body: WorkspacePreferencesUpdate,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    await _set_user_settings(
+        session,
+        user.id,
+        {
+            "workspace.timezone": body.timezone.strip(),
+            "workspace.locale": body.locale.strip(),
+            "workspace.date_format": body.date_format.strip(),
+        },
+    )
+    stored = await _user_settings_map(session, user.id)
+    return _workspace_payload(stored)
+
+
+@app.delete("/v1/session/account")
+async def delete_account(
+    body: AccountDeleteRequest,
+    response: Response,
+    user: User = Depends(require_auth_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if user.password_hash and not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password is incorrect")
+    if not user.password_hash and body.password != "DELETE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Type DELETE to confirm account deactivation",
+        )
+    user.status = "inactive"
+    await session.execute(
+        update(UserSession)
+        .where(UserSession.user_id == user.id)
+        .values(revoked=True)
+    )
+    await session.commit()
+    clear_auth_cookies(response)
+    response.delete_cookie("sid", path="/")
+    return {"message": "Account deactivated"}
 
 
 # ============================================================================

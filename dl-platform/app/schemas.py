@@ -57,6 +57,7 @@ class LoginRequest(BaseModel):
     email: str
     password: str
     remember: bool = True
+    otp: Optional[str] = None
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -192,5 +193,90 @@ class SubscriptionAdminOut(BaseModel):
     start: datetime
     end: Optional[datetime]
     auto_renew: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---- Account: API configuration ----
+class ApiConfigurationUpdate(BaseModel):
+    default_format: str = "mp4"
+    default_quality: str = "best"
+    default_platform: Optional[str] = None
+    timeout_seconds: int = Field(default=120, ge=10, le=600)
+    include_metadata: bool = True
+    retry_failed: bool = True
+
+
+# ---- Account: workspace preferences ----
+class WorkspacePreferencesUpdate(BaseModel):
+    timezone: str = "UTC"
+    locale: str = "en-US"
+    date_format: str = "MMM d, yyyy"
+
+
+# ---- Account: notifications ----
+class NotificationPreferencesUpdate(BaseModel):
+    email_quota: bool = True
+    email_incidents: bool = True
+    email_product: bool = False
+
+
+# ---- Account: security ----
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=255)
+
+
+class TwoFactorCodeRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=8)
+
+
+class AccountDeleteRequest(BaseModel):
+    password: str
+
+
+# ---- Account: support ----
+class SupportTicketCreate(BaseModel):
+    subject: str = Field(min_length=3, max_length=255)
+    message: str = Field(min_length=3, max_length=5000)
+    priority: str = "normal"
+
+
+class TicketMessageCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=5000)
+
+
+class TicketStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(open|pending|closed)$")
+
+
+class NotificationOut(BaseModel):
+    id: int
+    title: str
+    body: Optional[str]
+    type: str
+    read: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SupportTicketOut(BaseModel):
+    id: int
+    subject: str
+    priority: str
+    status: str
+    created_at: datetime
+    updated_at: Optional[datetime]
+    message_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TicketMessageOut(BaseModel):
+    id: int
+    author: str
+    body: str
+    created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
