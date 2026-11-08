@@ -245,3 +245,41 @@ class TicketMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     ticket = relationship("SupportTicket", back_populates="messages", lazy="selectin")
+
+
+class Announcement(Base):
+    __tablename__ = "announcements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    audience: Mapped[str] = mapped_column(String(50), default="all")
+    sent_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FaqItem(Base):
+    __tablename__ = "faq_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    question: Mapped[str] = mapped_column(String(500), nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(100), default="General")
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    published: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DocPage(Base):
+    __tablename__ = "doc_pages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    section: Mapped[str] = mapped_column(String(100), default="Guides")
+    slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    body: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft | published
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), onupdate=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

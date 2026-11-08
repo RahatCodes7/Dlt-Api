@@ -36,11 +36,11 @@ class PlatformEngine(ABC):
         return any(re.search(p, url, re.IGNORECASE) for p in self.url_patterns)
 
     @abstractmethod
-    async def extract_info(self, url: str) -> Tuple[Optional[dict], Optional[str]]:
+    async def extract_info(self, url: str, timeout: Optional[float] = None, retries: Optional[int] = None) -> Tuple[Optional[dict], Optional[str]]:
         """Return (info_dict, error)."""
 
     @abstractmethod
-    async def download(self, url: str, format_id: Optional[str] = None) -> Tuple[Optional[str], Optional[dict], Optional[str]]:
+    async def download(self, url: str, format_id: Optional[str] = None, timeout: Optional[float] = None, retries: Optional[int] = None) -> Tuple[Optional[str], Optional[dict], Optional[str]]:
         """Return (file_path, info_dict, error)."""
 
 
@@ -63,15 +63,16 @@ class YtDlpEngine(PlatformEngine):
     def matches(self, url: str) -> bool:
         return any(re.search(p, url, re.IGNORECASE) for p in self.url_patterns)
 
-    def _ydl_opts(self, download: bool = False, format_id: Optional[str] = None, proxy: Optional[str] = None) -> dict:
+    def _ydl_opts(self, download: bool = False, format_id: Optional[str] = None, proxy: Optional[str] = None, retries: Optional[int] = None) -> dict:
+        retry_count = max(1, min(int(retries), 5)) if retries else 1
         opts = {
             "quiet": True,
             "no_warnings": True,
             "extract_flat": False,
             "socket_timeout": 30,
-            "retries": 1,
-            "fragment_retries": 1,
-            "extractor_retries": 1,
+            "retries": retry_count,
+            "fragment_retries": retry_count,
+            "extractor_retries": retry_count,
             "skip_download": not download,
         }
         if proxy:
@@ -121,10 +122,10 @@ class YtDlpEngine(PlatformEngine):
         return opts
 
     def _run_extract_info(
-        self, url: str, proxy: Optional[str] = None
+        self, url: str, proxy: Optional[str] = None, retries: Optional[int] = None
     ) -> Tuple[Optional[dict], Optional[str]]:
         try:
-            with yt_dlp.YoutubeDL(self._ydl_opts(download=False, proxy=proxy)) as ydl:
+            with yt_dlp.YoutubeDL(self._ydl_opts(download=False, proxy=proxy, retries=retries)) as ydl:
                 info = ydl.extract_info(url, download=False)
                 if not info:
                     return None, "Could not extract video info"
@@ -134,11 +135,11 @@ class YtDlpEngine(PlatformEngine):
             return None, str(exc)
 
     def _run_download(
-        self, url: str, format_id: Optional[str] = None, proxy: Optional[str] = None
+        self, url: str, format_id: Optional[str] = None, proxy: Optional[str] = None, retries: Optional[int] = None
     ) -> Tuple[Optional[str], Optional[dict], Optional[str]]:
         try:
             with tempfile.TemporaryDirectory(dir=DOWNLOAD_DIR, prefix=".tmp-") as tmpdir:
-                opts = self._ydl_opts(download=True, format_id=format_id, proxy=proxy)
+                opts = self._ydl_opts(download=True, format_id=format_id, proxy=proxy, retries=retries)
                 opts["outtmpl"] = os.path.join(tmpdir, "video.%(ext)s")
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(url, download=True)
@@ -183,19 +184,20 @@ class YtDlpEngine(PlatformEngine):
             return [*proxies, None]
         return [None, *proxies]
 
-    async def extract_info(self, url: str) -> Tuple[Optional[dict], Optional[str]]:
+    async def extract_info(self, url: str, timeout: Optional[float] = None, retries: Optional[int] = None) -> Tuple[Optional[dict], Optional[str]]:
         """Extract metadata, falling back to rotating proxies when blocked."""
+        effective_timeout = max(5.0, float(timeout)) if timeout else self.info_timeout
         proxies = await self._proxy_attempts()
         last_error = "Could not extract video info"
 
         for proxy_url in self._ordered_attempts(proxies):
             try:
                 info, error = await asyncio.wait_for(
-                    asyncio.to_thread(self._run_extract_info, url, proxy_url),
-                    timeout=self.info_timeout,
+                    asyncio.to_thread(self._run_extract_info, url, proxy_url, retries),
+                    timeout=effective_timeout,
                 )
             except asyncio.TimeoutError:
-                info, error = None, f"Timed out after {self.info_timeout}s"
+                info, error = None, f"Timed out after {int(effective_timeout)}s"
             except asyncio.CancelledError:
                 raise
 
@@ -211,24 +213,25 @@ class YtDlpEngine(PlatformEngine):
         return None, last_error
 
     async def download(
-        self, url: str, format_id: Optional[str] = None
+        self, url: str, format_id: Optional[str] = None, timeout: Optional[float] = None, retries: Optional[int] = None
     ) -> Tuple[Optional[str], Optional[dict], Optional[str]]:
         """Download with proxy rotation and retry on failure.
 
         PROXY_MODE=auto (default) tries a direct connection first, then rotates
         through healthy proxies. PROXY_MODE=always prefers proxies first.
         """
+        effective_timeout = max(5.0, float(timeout)) if timeout else self.timeout
         proxies = await self._proxy_attempts()
         last_error = "Download failed"
 
         for proxy_url in self._ordered_attempts(proxies):
             try:
                 file_path, info, error = await asyncio.wait_for(
-                    asyncio.to_thread(self._run_download, url, format_id, proxy_url),
-                    timeout=self.timeout,
+                    asyncio.to_thread(self._run_download, url, format_id, proxy_url, retries),
+                    timeout=effective_timeout,
                 )
             except asyncio.TimeoutError:
-                file_path, info, error = None, None, f"Timed out after {self.timeout}s"
+                file_path, info, error = None, None, f"Timed out after {int(effective_timeout)}s"
             except asyncio.CancelledError:
                 raise
 

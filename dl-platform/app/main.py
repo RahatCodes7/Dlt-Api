@@ -143,6 +143,33 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from app.admin_routes import router as admin_router, maintenance_config, signup_enabled, gateway_rate_limit, platform_config
+
+_MAINTENANCE_CACHE: dict = {"at": 0.0, "enabled": False, "message": ""}
+_MAINTENANCE_TTL = 10.0
+import re as _re
+_MAINTENANCE_PATH = _re.compile(r"^/v1/dlt/[^/]+/(info|download)$")
+
+
+@app.middleware("http")
+async def maintenance_gate(request: Request, call_next):
+    if request.method == "POST" and _MAINTENANCE_PATH.match(request.url.path):
+        now = time.monotonic()
+        if now - _MAINTENANCE_CACHE["at"] > _MAINTENANCE_TTL:
+            cfg = await maintenance_config()
+            _MAINTENANCE_CACHE.update({"at": now, "enabled": cfg["enabled"], "message": cfg["message"]})
+        if _MAINTENANCE_CACHE["enabled"]:
+            return _error_response(
+                platform=_platform_from_path(request.url.path),
+                request_id=_request_id(),
+                code="MAINTENANCE",
+                message=_MAINTENANCE_CACHE["message"] or "Service is under maintenance. Please try again shortly.",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                retry_after=60,
+            )
+    return await call_next(request)
+
+
 def _normalize_origin(origin: str) -> str:
     # Browsers send origins without a trailing slash. Render/env values often
     # include one, which makes every CORS check fail and blocks login requests.
@@ -164,6 +191,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(admin_router)
 
 
 def _frontend_url() -> str:
@@ -704,6 +733,8 @@ async def register(
     body: RegisterRequest,
     session: AsyncSession = Depends(get_session),
 ):
+    if not await signup_enabled():
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Registration is currently disabled")
     email = body.email.lower().strip()
     password = body.password
     name = body.name
@@ -1069,6 +1100,8 @@ async def google_callback(
         user = result.scalar_one_or_none()
 
     if user is None:
+        if not await signup_enabled():
+            return _google_failure("signup_disabled")
         result = await session.execute(select(Plan).where(Plan.name == "Free").limit(1))
         plan = result.scalar_one_or_none()
         if plan is None:
@@ -1361,11 +1394,19 @@ async def platform_info(
     if not engine_.matches(str(body.url)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URL does not match platform")
 
+    platform_cfg = await platform_config(session, platform)
+    if not platform_cfg["enabled"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This platform is temporarily disabled")
+
     rid = _request_id()
     await _enforce_quota(session, user)
 
+    info_limit = await gateway_rate_limit(session, user, "info", 30)
+    platform_rpm = platform_cfg["requests_per_minute"]
+    if platform_rpm > 0:
+        info_limit = min(info_limit, platform_rpm)
     rl_key = f"ratelimit:{user.id}:{platform}:info"
-    allowed = await rate_limit_check(rl_key, limit=30, window_seconds=60)
+    allowed = await rate_limit_check(rl_key, limit=info_limit, window_seconds=60)
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1373,7 +1414,11 @@ async def platform_info(
             headers={"Retry-After": "60"},
         )
 
-    info, error = await engine_.extract_info(str(body.url))
+    info, error = await engine_.extract_info(
+        str(body.url),
+        timeout=platform_cfg["timeout_seconds"],
+        retries=platform_cfg["retries"],
+    )
     if error:
         await increment_usage(user.id, session)
         await _record_usage(session, user, platform, str(body.url), False)
@@ -1404,11 +1449,19 @@ async def platform_download(
     if not engine_.matches(str(body.url)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URL does not match platform")
 
+    platform_cfg = await platform_config(session, platform)
+    if not platform_cfg["enabled"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This platform is temporarily disabled")
+
     rid = _request_id()
     await _enforce_quota(session, user)
 
+    download_limit = await gateway_rate_limit(session, user, "download", 10)
+    platform_rpm = platform_cfg["requests_per_minute"]
+    if platform_rpm > 0:
+        download_limit = min(download_limit, platform_rpm)
     rl_key = f"ratelimit:{user.id}:{platform}:download"
-    allowed = await rate_limit_check(rl_key, limit=10, window_seconds=60)
+    allowed = await rate_limit_check(rl_key, limit=download_limit, window_seconds=60)
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1441,7 +1494,12 @@ async def platform_download(
     # Explicit format id wins, then requested quality, then the legacy
     # ``format`` field ("mp4"/"mp3"/"720p"/...).
     selected_format = body.format_id or body.quality or body.format
-    file_path, info, error = await engine_.download(str(body.url), format_id=selected_format)
+    file_path, info, error = await engine_.download(
+        str(body.url),
+        format_id=selected_format,
+        timeout=platform_cfg["timeout_seconds"],
+        retries=platform_cfg["retries"],
+    )
     if error:
         await increment_usage(user.id, session)
         await _record_usage(session, user, platform, str(body.url), False)
