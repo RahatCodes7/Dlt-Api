@@ -4,12 +4,14 @@ import * as React from "react";
 import {
   Activity,
   CheckCircle2,
+  Loader2,
   Pause,
   Play,
   Plus,
   RefreshCw,
   ShieldCheck,
   Trash2,
+  XCircle,
 } from "lucide-react";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { StatCard } from "@/components/dashboard/stat-card";
@@ -33,6 +35,26 @@ interface CheckResult {
   latency_ms?: number;
   ip?: string | null;
   error?: string;
+}
+
+interface TestResult {
+  ok: boolean;
+  latency_ms?: number;
+  total_ms?: number;
+  ipify: {
+    ok: boolean;
+    status_code?: number | null;
+    latency_ms?: number;
+    ip?: string | null;
+    error?: string | null;
+  };
+  platforms: {
+    platform: string;
+    ok: boolean;
+    status_code?: number;
+    latency_ms?: number;
+    error?: string;
+  }[];
 }
 
 const formatChecked = (value?: string | null) => {
@@ -61,6 +83,8 @@ export default function ProxyManagementPage() {
   const [platform, setPlatform] = React.useState("");
   const [error, setError] = React.useState("");
   const [success, setSuccess] = React.useState("");
+  const [testing, setTesting] = React.useState(false);
+  const [testResult, setTestResult] = React.useState<TestResult | null>(null);
 
   const loadProxies = React.useCallback(async () => {
     try {
@@ -101,10 +125,47 @@ export default function ProxyManagementPage() {
     window.setTimeout(() => setSuccess(""), 3500);
   };
 
+  const testProxyBeforeAdd = async () => {
+    if (!host || !port) {
+      setError("Host and port are required");
+      return;
+    }
+    const parsedPort = Number.parseInt(port, 10);
+    if (!Number.isFinite(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      setError("Port must be between 1 and 65535");
+      return;
+    }
+    setTesting(true);
+    setError("");
+    try {
+      const result = await apiFetch<TestResult>("/v1/admin/proxies/test", {
+        method: "POST",
+        body: JSON.stringify({
+          type,
+          host,
+          port: parsedPort,
+          user: user || undefined,
+          password: password || undefined,
+          platform: platform || undefined,
+        }),
+      });
+      setTestResult(result);
+    } catch (exc) {
+      setTestResult(null);
+      setError(exc instanceof Error ? exc.message : "Proxy check failed");
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const addProxy = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!host || !port) {
       setError("Host and port are required");
+      return;
+    }
+    if (testResult?.ipify?.ok !== true) {
+      setError("Check the proxy first and wait for it to pass before adding it.");
       return;
     }
     try {
@@ -124,6 +185,7 @@ export default function ProxyManagementPage() {
       setUser("");
       setPassword("");
       setPlatform("");
+      setTestResult(null);
       notify("Proxy added");
       await loadProxies();
     } catch (exc) {
@@ -223,7 +285,7 @@ export default function ProxyManagementPage() {
             <select
               id="proxy-type"
               value={type}
-              onChange={(event) => setType(event.target.value)}
+              onChange={(event) => { setType(event.target.value); setTestResult(null); }}
               className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <option value="http">http</option>
@@ -236,7 +298,7 @@ export default function ProxyManagementPage() {
             <input
               id="proxy-host"
               value={host}
-              onChange={(event) => setHost(event.target.value)}
+              onChange={(event) => { setHost(event.target.value); setTestResult(null); }}
               placeholder="136.162.138.42"
               className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
@@ -246,7 +308,7 @@ export default function ProxyManagementPage() {
             <input
               id="proxy-port"
               value={port}
-              onChange={(event) => setPort(event.target.value)}
+              onChange={(event) => { setPort(event.target.value); setTestResult(null); }}
               placeholder="41217"
               type="number"
               className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -257,7 +319,7 @@ export default function ProxyManagementPage() {
             <input
               id="proxy-user"
               value={user}
-              onChange={(event) => setUser(event.target.value)}
+              onChange={(event) => { setUser(event.target.value); setTestResult(null); }}
               placeholder="optional"
               className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
@@ -267,7 +329,7 @@ export default function ProxyManagementPage() {
             <input
               id="proxy-password"
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(event) => { setPassword(event.target.value); setTestResult(null); }}
               type="password"
               placeholder="optional"
               className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -278,7 +340,7 @@ export default function ProxyManagementPage() {
             <select
               id="proxy-platform"
               value={platform}
-              onChange={(event) => setPlatform(event.target.value)}
+              onChange={(event) => { setPlatform(event.target.value); setTestResult(null); }}
               className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <option value="">All platforms</option>
@@ -289,10 +351,47 @@ export default function ProxyManagementPage() {
             </select>
           </div>
         </div>
-        <div className="mt-4 flex justify-end">
-          <button type="submit" className="btn btn-primary">
-            <Plus className="h-4 w-4" /> Add proxy
-          </button>
+        {testResult && (
+          <div className="mt-4 rounded-xl border border-border bg-muted/30 p-4 text-sm">
+            <span className={cn("inline-flex items-center gap-1.5 font-semibold", testResult.ipify.ok ? "text-accent" : "text-destructive")}>
+              {testResult.ipify.ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+              {testResult.ipify.ok
+                ? `Exit IP ${testResult.ipify.ip ?? "?"} · ${testResult.ipify.latency_ms}ms`
+                : `Unreachable${testResult.ipify.error ? ` — ${testResult.ipify.error}` : ""}`}
+            </span>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {testResult.platforms.map((entry) => (
+                <span
+                  key={entry.platform}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold",
+                    entry.ok ? "bg-accent/10 text-accent" : "bg-rose-500/10 text-rose-500",
+                  )}
+                  title={entry.ok ? `HTTP ${entry.status_code}` : entry.error ?? "unreachable"}
+                >
+                  {entry.platform}: {entry.ok ? `HTTP ${entry.status_code} · ${entry.latency_ms}ms` : "failed"}
+                </span>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Check runs from the API server. Any HTTP response (even a 403 bot-check) means the platform is reachable through this proxy.
+            </p>
+          </div>
+        )}
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-muted-foreground">
+            {testResult?.ipify?.ok
+              ? "Proxy passed the exit-IP check. You can add it now."
+              : "Run the check first — Add unlocks when the proxy responds."}
+          </p>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={testProxyBeforeAdd} disabled={testing || !host || !port} className="btn btn-outline">
+              {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />} Check proxy
+            </button>
+            <button type="submit" disabled={testResult?.ipify?.ok !== true} className="btn btn-primary disabled:cursor-not-allowed disabled:opacity-50">
+              <Plus className="h-4 w-4" /> Add proxy
+            </button>
+          </div>
         </div>
       </form>
 
