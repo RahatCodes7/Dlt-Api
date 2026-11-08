@@ -1517,7 +1517,7 @@ async def admin_put_site_group(
     await set_settings(session, values)
     await _admin_log(session, admin.id, f"site.{group}.update", ",".join(sorted(values)))
     await session.commit()
-    return await admin_get_site_group(group, user, session)
+    return await admin_get_site_group(group, admin, session)
 
 
 @router.get("/v1/public/site")
