@@ -3,7 +3,7 @@ services:
     name: dlt-api-platform
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python -c "import socksio; print('socks proxy support OK')"
     startCommand: gunicorn -c gunicorn.conf.py app.main:app
     envVars:
       - key: PYTHON_VERSION

@@ -13,7 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir "httpx[socks]>=0.27" "socksio>=1.0.0" \
+    && python -c "import socksio, httpx; print('SOCKS proxy support OK (socksio present)')"
 
 COPY . .
 
