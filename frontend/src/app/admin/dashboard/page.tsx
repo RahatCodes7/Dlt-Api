@@ -69,7 +69,8 @@ export default function AdminDashboardPage() {
   }, []);
 
   React.useEffect(() => {
-    load();
+    const timer = setTimeout(load, 0);
+    return () => clearTimeout(timer);
   }, [load]);
 
   if (loading) {
