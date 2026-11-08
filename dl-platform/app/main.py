@@ -2798,6 +2798,99 @@ async def check_proxy(
         }
 
 
+class ProxyTestRequest(BaseModel):
+    type: str = "http"
+    host: str
+    port: int
+    user: Optional[str] = None
+    password: Optional[str] = None
+    platform: Optional[str] = None
+
+
+_PLATFORM_PROBE_URLS = {
+    "youtube": "https://www.youtube.com/",
+    "instagram": "https://www.instagram.com/",
+    "facebook": "https://www.facebook.com/",
+    "tiktok": "https://www.tiktok.com/",
+}
+
+
+async def _probe_through_proxy(proxy_url: str, url: str, timeout: float = 10.0, read_body: bool = False) -> dict:
+    """Probe one URL through the proxy. Any HTTP response counts as reachable."""
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(proxy=proxy_url, timeout=timeout, follow_redirects=True) as client:
+            response = await client.get(url)
+        result = {
+            "ok": True,
+            "status_code": response.status_code,
+            "latency_ms": round((time.monotonic() - started) * 1000),
+        }
+        if read_body:
+            result["text"] = response.text.strip()[:64]
+        return result
+    except Exception as exc:  # noqa: BLE001 - report any probe failure to the admin
+        return {
+            "ok": False,
+            "error": str(exc)[:240],
+            "latency_ms": round((time.monotonic() - started) * 1000),
+        }
+
+
+@app.post("/v1/admin/proxies/test")
+async def test_proxy_connection(
+    body: ProxyTestRequest,
+    current_user: User = Depends(require_auth_user),
+):
+    """Check an unsaved proxy before adding it. No database writes; credentials are never logged."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    host = (body.host or "").strip()
+    if not host or len(host) > 255 or any(ch.isspace() for ch in host):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid host")
+    if body.port is None or body.port < 1 or body.port > 65535:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Port must be between 1 and 65535")
+    proxy_type = (body.type or "http").strip().lower()
+    if proxy_type not in {"http", "https", "socks5"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Type must be http, https or socks5")
+
+    auth = ""
+    if body.user and body.password:
+        auth = f"{quote(body.user, safe='')}:{quote(body.password, safe='')}@"
+    proxy_url = f"{proxy_type}://{auth}{host}:{body.port}"
+
+    selected = (body.platform or "").strip().lower()
+    platform_names = [selected] if selected in _PLATFORM_PROBE_URLS else list(_PLATFORM_PROBE_URLS)
+
+    ipify_probe = _probe_through_proxy(proxy_url, "https://api.ipify.org", 12.0, read_body=True)
+    platform_probes = [
+        (name, _probe_through_proxy(proxy_url, _PLATFORM_PROBE_URLS[name], 10.0))
+        for name in platform_names
+    ]
+    probes_started = time.monotonic()
+    results = await asyncio.gather(ipify_probe, *[probe for _, probe in platform_probes])
+    ipify_result = results[0]
+    platform_results = [
+        {"platform": name, **result}
+        for (name, _), result in zip(platform_probes, results[1:])
+    ]
+
+    return {
+        "ok": ipify_result["ok"],
+        "latency_ms": ipify_result["latency_ms"],
+        "total_ms": round((time.monotonic() - probes_started) * 1000),
+        "ipify": {
+            "ok": ipify_result["ok"],
+            "status_code": ipify_result.get("status_code"),
+            "latency_ms": ipify_result["latency_ms"],
+            "ip": ipify_result.get("text") if ipify_result["ok"] else None,
+            "error": ipify_result.get("error"),
+        },
+        "platforms": platform_results,
+    }
+
+
 # ============================================================================
 # STATIC + PAGES (frontend)
 # ============================================================================
